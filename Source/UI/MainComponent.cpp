@@ -2,7 +2,42 @@
 #include "../Utils/Constants.h"
 #include "../Utils/MelSpectrogram.h"
 
-MainComponent::MainComponent()
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+#elif JUCE_MAC || JUCE_LINUX || JUCE_BSD
+ #include <dlfcn.h>
+#endif
+
+static juce::File getRuntimeBinaryDir()
+{
+#if defined(JucePlugin_Build_VST3) || defined(JucePlugin_Build_AU) || defined(JucePlugin_Build_AUv3) || defined(JucePlugin_Build_LV2)
+   #if JUCE_WINDOWS
+    HMODULE moduleHandle = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&getRuntimeBinaryDir),
+                       &moduleHandle);
+
+    wchar_t path[MAX_PATH]{};
+    if (moduleHandle != nullptr && GetModuleFileNameW(moduleHandle, path, static_cast<DWORD>(sizeof(path) / sizeof(path[0]))) > 0)
+        return juce::File(juce::String(path)).getParentDirectory();
+   #elif JUCE_MAC || JUCE_LINUX || JUCE_BSD
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<const void*>(&getRuntimeBinaryDir), &info) != 0 && info.dli_fname != nullptr)
+        return juce::File(juce::String(info.dli_fname)).getParentDirectory();
+   #endif
+#endif
+
+    return juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+}
+
+MainComponent::MainComponent(bool enableAudioDevice)
+    : enableAudioDeviceFlag(enableAudioDevice)
 {
     DBG("MainComponent: Starting initialization...");
     setSize(1400, 900);
@@ -10,7 +45,8 @@ MainComponent::MainComponent()
     DBG("MainComponent: Creating project and engines...");
     // Initialize components
     project = std::make_unique<Project>();
-    audioEngine = std::make_unique<AudioEngine>();
+    if (enableAudioDeviceFlag)
+        audioEngine = std::make_unique<AudioEngine>();
     pitchDetector = std::make_unique<PitchDetector>();
     fcpePitchDetector = std::make_unique<FCPEPitchDetector>();
     vocoder = std::make_unique<Vocoder>();
@@ -18,9 +54,7 @@ MainComponent::MainComponent()
     
     DBG("MainComponent: Looking for FCPE model...");
     // Try to load FCPE model
-    auto modelsDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-                        .getParentDirectory()
-                        .getChildFile("models");
+    auto modelsDir = getRuntimeBinaryDir().getChildFile("models");
     
     auto fcpeModelPath = modelsDir.getChildFile("fcpe.onnx");
     auto melFilterbankPath = modelsDir.getChildFile("mel_filterbank.bin");
@@ -50,8 +84,9 @@ MainComponent::MainComponent()
     applySettings();
     
     DBG("MainComponent: Initializing audio...");
-    // Initialize audio
-    audioEngine->initializeAudio();
+    // Initialize audio (standalone app only)
+    if (audioEngine)
+        audioEngine->initializeAudio();
     
     DBG("MainComponent: Adding child components...");
     // Add child components
@@ -98,24 +133,27 @@ MainComponent::MainComponent()
     
     DBG("MainComponent: Setting up audio engine callbacks...");
     // Setup audio engine callbacks
-    audioEngine->setPositionCallback([this](double position)
+    if (audioEngine)
     {
-        juce::MessageManager::callAsync([this, position]()
+        audioEngine->setPositionCallback([this](double position)
         {
-            pianoRoll.setCursorTime(position);
-            waveform.setCursorTime(position);
-            toolbar.setCurrentTime(position);
+            juce::MessageManager::callAsync([this, position]()
+            {
+                pianoRoll.setCursorTime(position);
+                waveform.setCursorTime(position);
+                toolbar.setCurrentTime(position);
+            });
         });
-    });
-    
-    audioEngine->setFinishCallback([this]()
-    {
-        juce::MessageManager::callAsync([this]()
+        
+        audioEngine->setFinishCallback([this]()
         {
-            isPlaying = false;
-            toolbar.setPlaying(false);
+            juce::MessageManager::callAsync([this]()
+            {
+                isPlaying = false;
+                toolbar.setPlaying(false);
+            });
         });
-    });
+    }
     
     // Set initial project
     pianoRoll.setProject(project.get());
@@ -128,7 +166,8 @@ MainComponent::MainComponent()
     
     DBG("MainComponent: Loading config...");
     // Load config
-    loadConfig();
+    if (enableAudioDeviceFlag)
+        loadConfig();
     
     DBG("MainComponent: Starting timer...");
     // Start timer for UI updates
@@ -139,10 +178,17 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
-    saveConfig();
+    if (enableAudioDeviceFlag)
+        saveConfig();
     removeKeyListener(this);
     stopTimer();
-    audioEngine->shutdownAudio();
+
+    cancelLoading = true;
+    if (loaderThread.joinable())
+        loaderThread.join();
+
+    if (audioEngine)
+        audioEngine->shutdownAudio();
 }
 
 void MainComponent::paint(juce::Graphics& g)
@@ -169,12 +215,45 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
-    // Timer callback for any periodic updates
-    // The position updates are handled by the audio engine callback
+    if (isLoadingAudio.load())
+    {
+        const auto progress = static_cast<float>(loadingProgress.load());
+        toolbar.setProgress(progress);
+
+        juce::String msg;
+        {
+            const juce::ScopedLock sl(loadingMessageLock);
+            msg = loadingMessage;
+        }
+
+        if (msg.isNotEmpty() && msg != lastLoadingMessage)
+        {
+            toolbar.showProgress(msg);
+            parameterPanel.setLoadingStatus(msg);
+            lastLoadingMessage = msg;
+        }
+
+        return;
+    }
+
+    if (lastLoadingMessage.isNotEmpty())
+    {
+        toolbar.hideProgress();
+        parameterPanel.clearLoadingStatus();
+        lastLoadingMessage.clear();
+    }
 }
 
 bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* /*originatingComponent*/)
 {
+    // Ctrl+S: Save project
+    if (key == juce::KeyPress('s', juce::ModifierKeys::ctrlModifier, 0) ||
+        key == juce::KeyPress('S', juce::ModifierKeys::ctrlModifier, 0))
+    {
+        saveProject();
+        return true;
+    }
+
     // Ctrl+Z: Undo
     if (key == juce::KeyPress('z', juce::ModifierKeys::ctrlModifier, 0))
     {
@@ -223,7 +302,6 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* /*ori
         }
         return true;
     }
-    
     // Home: go to start
     if (key == juce::KeyPress::homeKey)
     {
@@ -231,7 +309,6 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* /*ori
         return true;
     }
     
-    // End: go to end
     if (key == juce::KeyPress::endKey)
     {
         if (project)
@@ -242,6 +319,65 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* /*ori
     }
     
     return false;
+}
+
+void MainComponent::saveProject()
+{
+    if (!project) return;
+
+    auto target = project->getProjectFilePath();
+    if (target == juce::File{})
+    {
+        // Default next to audio if possible
+        auto audio = project->getFilePath();
+        if (audio.existsAsFile())
+            target = audio.withFileExtension("peproj");
+        else
+            target = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                        .getChildFile("Untitled.peproj");
+
+        fileChooser = std::make_unique<juce::FileChooser>(
+            "Save project...",
+            target,
+            "*.peproj");
+
+        auto chooserFlags = juce::FileBrowserComponent::saveMode
+                          | juce::FileBrowserComponent::canSelectFiles
+                          | juce::FileBrowserComponent::warnAboutOverwriting;
+
+        fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+            if (file == juce::File{})
+                return;
+
+            if (file.getFileExtension().isEmpty())
+                file = file.withFileExtension("peproj");
+
+            toolbar.showProgress("Saving...");
+            toolbar.setProgress(-1.0f);
+            parameterPanel.setLoadingStatus("Saving...");
+
+            const bool ok = project->saveToFile(file);
+            if (ok)
+                project->setProjectFilePath(file);
+
+            toolbar.hideProgress();
+            parameterPanel.clearLoadingStatus();
+        });
+
+        return;
+    }
+
+    toolbar.showProgress("Saving...");
+    toolbar.setProgress(-1.0f);
+    parameterPanel.setLoadingStatus("Saving...");
+
+    const bool ok = project->saveToFile(target);
+    juce::ignoreUnused(ok);
+
+    toolbar.hideProgress();
+    parameterPanel.clearLoadingStatus();
 }
 
 void MainComponent::openFile()
@@ -267,122 +403,167 @@ void MainComponent::openFile()
 
 void MainComponent::loadAudioFile(const juce::File& file)
 {
-    parameterPanel.setLoadingStatus("Loading audio...");
-    
-    juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
-    
-    std::unique_ptr<juce::AudioFormatReader> reader(
-        formatManager.createReaderFor(file));
-    
-    if (reader != nullptr)
+    if (isLoadingAudio.load())
+        return;
+
+    cancelLoading = false;
+    isLoadingAudio = true;
+    loadingProgress = 0.0;
     {
+        const juce::ScopedLock sl(loadingMessageLock);
+        loadingMessage = "Loading audio...";
+    }
+    toolbar.showProgress("Loading audio...");
+    toolbar.setProgress(0.0f);
+    parameterPanel.setLoadingStatus("Loading audio...");
+
+    if (loaderThread.joinable())
+        loaderThread.join();
+
+    loaderThread = std::thread([this, file]()
+    {
+        auto updateProgress = [this](double p, const juce::String& msg)
+        {
+            loadingProgress = juce::jlimit(0.0, 1.0, p);
+            const juce::ScopedLock sl(loadingMessageLock);
+            loadingMessage = msg;
+        };
+
+        updateProgress(0.05, "Loading audio...");
+
+        juce::AudioFormatManager formatManager;
+        formatManager.registerBasicFormats();
+
+        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+        if (reader == nullptr || cancelLoading.load())
+        {
+            juce::MessageManager::callAsync([this]()
+            {
+                isLoadingAudio = false;
+            });
+            return;
+        }
+
         // Read audio data
-        int numSamples = static_cast<int>(reader->lengthInSamples);
-        int sampleRate = static_cast<int>(reader->sampleRate);
-        
+        const int numSamples = static_cast<int>(reader->lengthInSamples);
+        const int srcSampleRate = static_cast<int>(reader->sampleRate);
+
         juce::AudioBuffer<float> buffer(1, numSamples);
-        
-        // Read mono (or mix to mono)
+
+        updateProgress(0.10, "Reading audio...");
         if (reader->numChannels == 1)
         {
             reader->read(&buffer, 0, numSamples, 0, true, false);
         }
         else
         {
-            // Mix stereo to mono
             juce::AudioBuffer<float> stereoBuffer(2, numSamples);
             reader->read(&stereoBuffer, 0, numSamples, 0, true, true);
-            
+
             const float* left = stereoBuffer.getReadPointer(0);
             const float* right = stereoBuffer.getReadPointer(1);
             float* mono = buffer.getWritePointer(0);
-            
+
             for (int i = 0; i < numSamples; ++i)
-            {
                 mono[i] = (left[i] + right[i]) * 0.5f;
-            }
         }
-        
-        // Resample if needed
-        if (sampleRate != SAMPLE_RATE)
+
+        if (cancelLoading.load())
         {
-            // Simple linear interpolation resampling
-            double ratio = static_cast<double>(sampleRate) / SAMPLE_RATE;
-            int newNumSamples = static_cast<int>(numSamples / ratio);
-            
+            juce::MessageManager::callAsync([this]() { isLoadingAudio = false; });
+            return;
+        }
+
+        // Resample if needed
+        if (srcSampleRate != SAMPLE_RATE)
+        {
+            updateProgress(0.18, "Resampling...");
+            const double ratio = static_cast<double>(srcSampleRate) / SAMPLE_RATE;
+            const int newNumSamples = static_cast<int>(numSamples / ratio);
+
             juce::AudioBuffer<float> resampledBuffer(1, newNumSamples);
             const float* src = buffer.getReadPointer(0);
             float* dst = resampledBuffer.getWritePointer(0);
-            
+
             for (int i = 0; i < newNumSamples; ++i)
             {
-                double srcPos = i * ratio;
-                int srcIndex = static_cast<int>(srcPos);
-                double frac = srcPos - srcIndex;
-                
+                const double srcPos = i * ratio;
+                const int srcIndex = static_cast<int>(srcPos);
+                const double frac = srcPos - srcIndex;
+
                 if (srcIndex + 1 < numSamples)
-                {
-                    dst[i] = static_cast<float>(src[srcIndex] * (1.0 - frac) + 
-                                                 src[srcIndex + 1] * frac);
-                }
+                    dst[i] = static_cast<float>(src[srcIndex] * (1.0 - frac) + src[srcIndex + 1] * frac);
                 else
-                {
                     dst[i] = src[srcIndex];
-                }
             }
-            
+
             buffer = std::move(resampledBuffer);
         }
-        
-        // Create new project
-        project = std::make_unique<Project>();
-        project->setFilePath(file);
-        
-        // Set audio data
-        auto& audioData = project->getAudioData();
+
+        updateProgress(0.22, "Preparing project...");
+        auto newProject = std::make_unique<Project>();
+        newProject->setFilePath(file);
+        auto& audioData = newProject->getAudioData();
         audioData.waveform = std::move(buffer);
         audioData.sampleRate = SAMPLE_RATE;
-        
-        parameterPanel.setLoadingStatus("Analyzing audio...");
-        
-        // Analyze audio
-        analyzeAudio();
-        
-        // Update UI
-        pianoRoll.setProject(project.get());
-        waveform.setProject(project.get());
-        parameterPanel.setProject(project.get());
-        toolbar.setTotalTime(audioData.getDuration());
-        
-        // Set audio to engine
-        audioEngine->loadWaveform(audioData.waveform, audioData.sampleRate);
-        
-        // Save original waveform for incremental synthesis
-        originalWaveform.makeCopyOf(audioData.waveform);
-        hasOriginalWaveform = true;
-        
-        parameterPanel.clearLoadingStatus();
-        
-        repaint();
-    }
-    else
-    {
-        parameterPanel.clearLoadingStatus();
-    }
+
+        if (cancelLoading.load())
+        {
+            juce::MessageManager::callAsync([this]() { isLoadingAudio = false; });
+            return;
+        }
+
+        updateProgress(0.25, "Analyzing audio...");
+        analyzeAudio(*newProject, updateProgress);
+
+        if (cancelLoading.load())
+        {
+            juce::MessageManager::callAsync([this]() { isLoadingAudio = false; });
+            return;
+        }
+
+        updateProgress(0.95, "Finalizing...");
+
+        juce::MessageManager::callAsync([this, proj = std::move(newProject)]() mutable
+        {
+            project = std::move(proj);
+
+            // Update UI
+            pianoRoll.setProject(project.get());
+            waveform.setProject(project.get());
+            parameterPanel.setProject(project.get());
+            toolbar.setTotalTime(project->getAudioData().getDuration());
+
+            // Set audio to engine
+            auto& audioData = project->getAudioData();
+            audioEngine->loadWaveform(audioData.waveform, audioData.sampleRate);
+
+            // Save original waveform for incremental synthesis
+            originalWaveform.makeCopyOf(audioData.waveform);
+            hasOriginalWaveform = true;
+
+            repaint();
+            isLoadingAudio = false;
+        });
+    });
 }
 
 void MainComponent::analyzeAudio()
 {
     if (!project) return;
-    
-    auto& audioData = project->getAudioData();
+    analyzeAudio(*project, [](double, const juce::String&) {});
+}
+
+void MainComponent::analyzeAudio(Project& targetProject, const std::function<void(double, const juce::String&)>& onProgress)
+{
+    auto& audioData = targetProject.getAudioData();
     if (audioData.waveform.getNumSamples() == 0) return;
     
     // Extract F0
     const float* samples = audioData.waveform.getReadPointer(0);
     int numSamples = audioData.waveform.getNumSamples();
     
+    onProgress(0.35, "Computing mel spectrogram...");
     // Compute mel spectrogram first (to know target frame count)
     MelSpectrogram melComputer(SAMPLE_RATE, N_FFT, HOP_SIZE, NUM_MELS, FMIN, FMAX);
     audioData.melSpectrogram = melComputer.compute(samples, numSamples);
@@ -392,6 +573,7 @@ void MainComponent::analyzeAudio()
     DBG("Computed mel spectrogram: " << audioData.melSpectrogram.size() << " frames x " 
         << (audioData.melSpectrogram.empty() ? 0 : audioData.melSpectrogram[0].size()) << " mels");
     
+    onProgress(0.55, "Extracting pitch (F0)...");
     // Use FCPE if available, otherwise fall back to YIN
     if (useFCPE && fcpePitchDetector && fcpePitchDetector->isLoaded())
     {
@@ -473,9 +655,9 @@ void MainComponent::analyzeAudio()
         audioData.voicedMask = std::move(voicedValues);
     }
     
+    onProgress(0.75, "Loading vocoder...");
     // Load vocoder model
-    auto modelPath = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-                        .getParentDirectory()
+    auto modelPath = getRuntimeBinaryDir()
                         .getChildFile("models")
                         .getChildFile("pc_nsf_hifigan.onnx");
     
@@ -491,8 +673,9 @@ void MainComponent::analyzeAudio()
         }
     }
     
+    onProgress(0.90, "Segmenting notes...");
     // Segment into notes
-    segmentIntoNotes();
+    segmentIntoNotes(targetProject);
     
     DBG("Loaded audio: " << audioData.waveform.getNumSamples() << " samples");
     DBG("Detected " << audioData.f0.size() << " F0 frames");
@@ -553,6 +736,7 @@ void MainComponent::exportFile()
 void MainComponent::play()
 {
     if (!project) return;
+    if (!audioEngine) return;
     
     isPlaying = true;
     toolbar.setPlaying(true);
@@ -561,6 +745,7 @@ void MainComponent::play()
 
 void MainComponent::pause()
 {
+    if (!audioEngine) return;
     isPlaying = false;
     toolbar.setPlaying(false);
     audioEngine->pause();
@@ -568,6 +753,7 @@ void MainComponent::pause()
 
 void MainComponent::stop()
 {
+    if (!audioEngine) return;
     isPlaying = false;
     toolbar.setPlaying(false);
     audioEngine->stop();
@@ -579,6 +765,7 @@ void MainComponent::stop()
 
 void MainComponent::seek(double time)
 {
+    if (!audioEngine) return;
     audioEngine->seek(time);
     pianoRoll.setCursorTime(time);
     waveform.setCursorTime(time);
@@ -906,9 +1093,13 @@ void MainComponent::setEditMode(EditMode mode)
 void MainComponent::segmentIntoNotes()
 {
     if (!project) return;
-    
-    auto& audioData = project->getAudioData();
-    auto& notes = project->getNotes();
+    segmentIntoNotes(*project);
+}
+
+void MainComponent::segmentIntoNotes(Project& targetProject)
+{
+    auto& audioData = targetProject.getAudioData();
+    auto& notes = targetProject.getNotes();
     notes.clear();
     
     if (audioData.f0.empty()) return;

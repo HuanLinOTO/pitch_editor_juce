@@ -3,8 +3,64 @@
 #include <algorithm>
 #include <cmath>
 
+namespace
+{
+    constexpr float twoPi = 6.2831853071795864769f;
+}
+
 Project::Project()
 {
+}
+
+bool Project::saveToFile(const juce::File& file) const
+{
+    juce::XmlElement root("PitchEditorProject");
+    root.setAttribute("version", 1);
+    root.setAttribute("name", name);
+    root.setAttribute("audioPath", filePath.getFullPathName());
+    root.setAttribute("sampleRate", audioData.sampleRate);
+    root.setAttribute("globalPitchOffset", globalPitchOffset);
+    root.setAttribute("formantShift", formantShift);
+    root.setAttribute("volume", volume);
+
+    // Notes
+    auto* notesElem = root.createNewChildElement("Notes");
+    for (const auto& note : notes)
+    {
+        auto* n = notesElem->createNewChildElement("Note");
+        n->setAttribute("startFrame", note.getStartFrame());
+        n->setAttribute("endFrame", note.getEndFrame());
+        n->setAttribute("midiNote", note.getMidiNote());
+        n->setAttribute("pitchOffset", note.getPitchOffset());
+
+        n->setAttribute("vibratoEnabled", note.isVibratoEnabled() ? 1 : 0);
+        n->setAttribute("vibratoRateHz", note.getVibratoRateHz());
+        n->setAttribute("vibratoDepthSemitones", note.getVibratoDepthSemitones());
+        n->setAttribute("vibratoPhaseRadians", note.getVibratoPhaseRadians());
+    }
+
+    // F0
+    auto* f0Elem = root.createNewChildElement("F0");
+    {
+        juce::StringArray parts;
+        parts.ensureStorageAllocated(static_cast<int>(audioData.f0.size()));
+        for (float v : audioData.f0)
+            parts.add(juce::String(v, 6));
+        f0Elem->addTextElement(parts.joinIntoString(" "));
+    }
+
+    // VoicedMask
+    auto* voicedElem = root.createNewChildElement("VoicedMask");
+    {
+        juce::String mask;
+        mask.preallocateBytes(static_cast<size_t>(audioData.voicedMask.size()));
+        for (bool b : audioData.voicedMask)
+            mask << (b ? '1' : '0');
+        voicedElem->addTextElement(mask);
+    }
+
+    const bool ok = root.writeTo(file);
+    return ok;
 }
 
 Note* Project::getNoteAtFrame(int frame)
@@ -155,14 +211,29 @@ std::vector<float> Project::getAdjustedF0() const
     
     for (const auto& note : notes)
     {
-        if (note.getPitchOffset() != 0.0f)
+        const bool hasPitchOffset = std::abs(note.getPitchOffset()) > 0.0001f;
+        const bool hasVibrato = note.isVibratoEnabled() && note.getVibratoDepthSemitones() > 0.0001f && note.getVibratoRateHz() > 0.0001f;
+
+        if (hasPitchOffset || hasVibrato)
         {
-            float noteRatio = std::pow(2.0f, note.getPitchOffset() / 12.0f);
             int start = note.getStartFrame();
             int end = std::min(note.getEndFrame(), static_cast<int>(adjustedF0.size()));
-            
+
             for (int i = start; i < end; ++i)
-                frameRatios[i] = noteRatio;
+            {
+                float ratio = 1.0f;
+                if (hasPitchOffset)
+                    ratio *= std::pow(2.0f, note.getPitchOffset() / 12.0f);
+
+                if (hasVibrato)
+                {
+                    const float t = framesToSeconds(i - start);
+                    const float vib = note.getVibratoDepthSemitones() * std::sin(twoPi * note.getVibratoRateHz() * t + note.getVibratoPhaseRadians());
+                    ratio *= std::pow(2.0f, vib / 12.0f);
+                }
+
+                frameRatios[i] = ratio;
+            }
         }
     }
     
@@ -239,9 +310,11 @@ std::vector<float> Project::getAdjustedF0ForRange(int startFrame, int endFrame) 
     
     for (const auto& note : notes)
     {
-        if (note.getPitchOffset() != 0.0f)
+        const bool hasPitchOffset = std::abs(note.getPitchOffset()) > 0.0001f;
+        const bool hasVibrato = note.isVibratoEnabled() && note.getVibratoDepthSemitones() > 0.0001f && note.getVibratoRateHz() > 0.0001f;
+
+        if (hasPitchOffset || hasVibrato)
         {
-            float noteRatio = std::pow(2.0f, note.getPitchOffset() / 12.0f);
             int noteStart = note.getStartFrame();
             int noteEnd = note.getEndFrame();
             
@@ -252,7 +325,22 @@ std::vector<float> Project::getAdjustedF0ForRange(int startFrame, int endFrame) 
             for (int i = overlapStart; i < overlapEnd; ++i)
             {
                 if (i >= 0 && i < rangeSize)
-                    frameRatios[i] = noteRatio;
+                {
+                    const int globalFrame = startFrame + i;
+                    float ratio = 1.0f;
+
+                    if (hasPitchOffset)
+                        ratio *= std::pow(2.0f, note.getPitchOffset() / 12.0f);
+
+                    if (hasVibrato)
+                    {
+                        const float t = framesToSeconds(globalFrame - noteStart);
+                        const float vib = note.getVibratoDepthSemitones() * std::sin(twoPi * note.getVibratoRateHz() * t + note.getVibratoPhaseRadians());
+                        ratio *= std::pow(2.0f, vib / 12.0f);
+                    }
+
+                    frameRatios[i] = ratio;
+                }
             }
         }
     }

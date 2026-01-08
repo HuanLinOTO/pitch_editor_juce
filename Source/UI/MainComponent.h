@@ -13,12 +13,15 @@
 #include "ParameterPanel.h"
 #include "SettingsComponent.h"
 
+#include <atomic>
+#include <thread>
+
 class MainComponent : public juce::Component,
                       public juce::Timer,
                       public juce::KeyListener
 {
 public:
-    MainComponent();
+    explicit MainComponent(bool enableAudioDevice = true);
     ~MainComponent() override;
     
     void paint(juce::Graphics& g) override;
@@ -49,10 +52,14 @@ private:
     
     void loadAudioFile(const juce::File& file);
     void analyzeAudio();
+    void analyzeAudio(Project& targetProject, const std::function<void(double, const juce::String&)>& onProgress);
     void segmentIntoNotes();
+    void segmentIntoNotes(Project& targetProject);
     
     void loadConfig();
     void saveConfig();
+
+    void saveProject();
     
     void undo();
     void redo();
@@ -66,6 +73,8 @@ private:
     std::unique_ptr<PitchUndoManager> undoManager;
     
     bool useFCPE = true;  // Use FCPE by default if available
+
+    const bool enableAudioDeviceFlag;
     
     ToolbarComponent toolbar;
     PianoRollComponent pianoRoll;
@@ -85,6 +94,15 @@ private:
     // Sync flags to prevent infinite loops
     bool isSyncingScroll = false;
     bool isSyncingZoom = false;
+
+    // Async load state
+    std::thread loaderThread;
+    std::atomic<bool> isLoadingAudio { false };
+    std::atomic<bool> cancelLoading { false };
+    std::atomic<double> loadingProgress { 0.0 };
+    juce::CriticalSection loadingMessageLock;
+    juce::String loadingMessage;
+    juce::String lastLoadingMessage;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

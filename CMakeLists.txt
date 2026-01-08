@@ -54,9 +54,22 @@ juce_add_gui_app(PitchEditor
     FILE_SHARING_ENABLED TRUE
     DOCUMENT_EXTENSIONS "wav;mp3;flac;ogg")
 
+# Create VST3 plugin
+juce_add_plugin(PitchEditorPlugin
+    PRODUCT_NAME "Pitch Editor"
+    COMPANY_NAME "OpenVPI"
+    BUNDLE_ID "com.openvpi.pitcheditor"
+    PLUGIN_MANUFACTURER_CODE OPVP
+    PLUGIN_CODE PTE1
+    FORMATS VST3
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    FILE_SHARING_ENABLED TRUE)
+
 # Add source files
-target_sources(PitchEditor PRIVATE
-    Source/Main.cpp
+set(PITCH_EDITOR_COMMON_SOURCES
     Source/JuceHeader.h
     Source/Audio/AudioEngine.cpp
     Source/Audio/AudioEngine.h
@@ -86,6 +99,17 @@ target_sources(PitchEditor PRIVATE
     Source/Utils/MelSpectrogram.cpp
     Source/Utils/MelSpectrogram.h)
 
+target_sources(PitchEditor PRIVATE
+    Source/Main.cpp
+    ${PITCH_EDITOR_COMMON_SOURCES})
+
+target_sources(PitchEditorPlugin PRIVATE
+    Source/Plugin/PluginProcessor.cpp
+    Source/Plugin/PluginProcessor.h
+    Source/Plugin/PluginEditor.cpp
+    Source/Plugin/PluginEditor.h
+    ${PITCH_EDITOR_COMMON_SOURCES})
+
 # Link JUCE modules
 target_link_libraries(PitchEditor PRIVATE
     juce::juce_gui_basics
@@ -99,11 +123,29 @@ target_link_libraries(PitchEditor PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
 
+target_link_libraries(PitchEditorPlugin PRIVATE
+    juce::juce_gui_basics
+    juce::juce_gui_extra
+    juce::juce_audio_basics
+    juce::juce_audio_devices
+    juce::juce_audio_formats
+    juce::juce_audio_utils
+    juce::juce_audio_processors
+    juce::juce_audio_plugin_client
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags)
+
 # Link ONNX Runtime if found
 if(ONNXRUNTIME_FOUND)
     target_include_directories(PitchEditor PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
     target_link_libraries(PitchEditor PRIVATE ${ONNXRUNTIME_LIBRARY})
     target_compile_definitions(PitchEditor PRIVATE HAVE_ONNXRUNTIME=1)
+
+    target_include_directories(PitchEditorPlugin PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+    target_link_libraries(PitchEditorPlugin PRIVATE ${ONNXRUNTIME_LIBRARY})
+    target_compile_definitions(PitchEditorPlugin PRIVATE HAVE_ONNXRUNTIME=1)
     
     # Copy ONNX Runtime DLLs to output directory on Windows
     if(WIN32)
@@ -120,6 +162,11 @@ if(ONNXRUNTIME_FOUND)
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${DLL}"
                     "$<TARGET_FILE_DIR:PitchEditor>")
+
+                add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DLL}"
+                    "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>")
             endforeach()
         else()
             message(WARNING "No ONNX Runtime DLLs found to copy")
@@ -129,6 +176,7 @@ endif()
 
 # Set C++ standard
 target_compile_features(PitchEditor PRIVATE cxx_std_17)
+target_compile_features(PitchEditorPlugin PRIVATE cxx_std_17)
 
 # Platform-specific settings
 if(WIN32)
@@ -136,11 +184,23 @@ if(WIN32)
         JUCE_WASAPI=1
         JUCE_DIRECTSOUND=1
         JUCE_ASIO=0)
+
+    target_compile_definitions(PitchEditorPlugin PRIVATE
+        JUCE_WASAPI=1
+        JUCE_DIRECTSOUND=1
+        JUCE_ASIO=0)
 elseif(APPLE)
     target_compile_definitions(PitchEditor PRIVATE
         JUCE_COREAUDIO=1)
+
+    target_compile_definitions(PitchEditorPlugin PRIVATE
+        JUCE_COREAUDIO=1)
 else()
     target_compile_definitions(PitchEditor PRIVATE
+        JUCE_ALSA=1
+        JUCE_JACK=1)
+
+    target_compile_definitions(PitchEditorPlugin PRIVATE
         JUCE_ALSA=1
         JUCE_JACK=1)
 endif()
@@ -152,6 +212,13 @@ target_compile_definitions(PitchEditor PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:PitchEditor,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:PitchEditor,JUCE_VERSION>")
 
+target_compile_definitions(PitchEditorPlugin PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:PitchEditorPlugin,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:PitchEditorPlugin,JUCE_VERSION>")
+
 # ONNX model path
 set(ONNX_MODEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/models/pc_nsf_hifigan.onnx")
 if(EXISTS ${ONNX_MODEL_PATH})
@@ -162,6 +229,12 @@ if(EXISTS ${ONNX_MODEL_PATH})
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${ONNX_MODEL_PATH}"
         "$<TARGET_FILE_DIR:PitchEditor>/models/pc_nsf_hifigan.onnx")
+
+    add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ONNX_MODEL_PATH}"
+        "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/pc_nsf_hifigan.onnx")
 else()
     message(WARNING "ONNX model not found at ${ONNX_MODEL_PATH}")
 endif()
@@ -178,6 +251,12 @@ if(EXISTS ${FCPE_MODEL_PATH})
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${FCPE_MODEL_PATH}"
         "$<TARGET_FILE_DIR:PitchEditor>/models/fcpe.onnx")
+
+    add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${FCPE_MODEL_PATH}"
+        "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/fcpe.onnx")
 else()
     message(WARNING "FCPE model not found at ${FCPE_MODEL_PATH}")
 endif()
@@ -187,6 +266,11 @@ if(EXISTS ${FCPE_MEL_PATH})
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${FCPE_MEL_PATH}"
         "$<TARGET_FILE_DIR:PitchEditor>/models/mel_filterbank.bin")
+
+    add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${FCPE_MEL_PATH}"
+        "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/mel_filterbank.bin")
 endif()
 
 if(EXISTS ${FCPE_CENT_PATH})
@@ -194,4 +278,9 @@ if(EXISTS ${FCPE_CENT_PATH})
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${FCPE_CENT_PATH}"
         "$<TARGET_FILE_DIR:PitchEditor>/models/cent_table.bin")
+
+    add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${FCPE_CENT_PATH}"
+        "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/cent_table.bin")
 endif()

@@ -116,11 +116,15 @@ void ToolbarComponent::resized()
     bounds.removeFromRight(4);
     zoomSlider.setBounds(bounds.removeFromRight(150));
     
-    // Progress bar (centered overlay)
+    // Progress bar (use the remaining middle area so it won't cover buttons)
     if (showingProgress)
     {
-        auto progressArea = getLocalBounds().reduced(200, 6);
-        progressLabel.setBounds(progressArea.removeFromLeft(100));
+        auto progressArea = bounds;
+        if (progressArea.getWidth() < 220)
+            progressArea = getLocalBounds().reduced(200, 6);
+
+        const int labelWidth = std::min(160, std::max(80, progressArea.getWidth() / 4));
+        progressLabel.setBounds(progressArea.removeFromLeft(labelWidth));
         progressBar.setBounds(progressArea);
     }
 }
@@ -217,6 +221,7 @@ void ToolbarComponent::showProgress(const juce::String& message)
     progressBar.setVisible(true);
     progressValue = -1.0;  // Indeterminate
     resized();
+    repaint();
 }
 
 void ToolbarComponent::hideProgress()
@@ -224,6 +229,8 @@ void ToolbarComponent::hideProgress()
     showingProgress = false;
     progressLabel.setVisible(false);
     progressBar.setVisible(false);
+    resized();
+    repaint();
 }
 
 void ToolbarComponent::setProgress(float progress)

@@ -42,6 +42,8 @@ public:
     // File operations
     void setFilePath(const juce::File& file) { filePath = file; }
     juce::File getFilePath() const { return filePath; }
+    void setProjectFilePath(const juce::File& file) { projectFilePath = file; }
+    juce::File getProjectFilePath() const { return projectFilePath; }
     juce::String getName() const { return name; }
     void setName(const juce::String& n) { name = n; }
     
@@ -94,10 +96,14 @@ public:
     // Modified state
     bool isModified() const { return modified; }
     void setModified(bool mod) { modified = mod; }
+
+    // Persistence
+    bool saveToFile(const juce::File& file) const;
     
 private:
     juce::String name = "Untitled";
     juce::File filePath;
+    juce::File projectFilePath;
     
     AudioData audioData;
     std::vector<Note> notes;

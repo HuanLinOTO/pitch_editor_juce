@@ -25,6 +25,16 @@ public:
     float getPitchOffset() const { return pitchOffset; }
     void setPitchOffset(float offset) { pitchOffset = offset; }
     float getAdjustedMidiNote() const { return midiNote + pitchOffset; }
+
+    // Vibrato
+    bool isVibratoEnabled() const { return vibratoEnabled; }
+    void setVibratoEnabled(bool enabled) { vibratoEnabled = enabled; }
+    float getVibratoRateHz() const { return vibratoRateHz; }
+    void setVibratoRateHz(float hz) { vibratoRateHz = hz; }
+    float getVibratoDepthSemitones() const { return vibratoDepthSemitones; }
+    void setVibratoDepthSemitones(float semitones) { vibratoDepthSemitones = semitones; }
+    float getVibratoPhaseRadians() const { return vibratoPhaseRadians; }
+    void setVibratoPhaseRadians(float radians) { vibratoPhaseRadians = radians; }
     
     // F0 values
     const std::vector<float>& getF0Values() const { return f0Values; }
@@ -53,6 +63,12 @@ private:
     int endFrame = 0;
     float midiNote = 60.0f;
     float pitchOffset = 0.0f;
+
+    bool vibratoEnabled = false;
+    float vibratoRateHz = 5.0f;
+    float vibratoDepthSemitones = 0.0f;
+    float vibratoPhaseRadians = 0.0f;
+
     std::vector<float> f0Values;
     bool selected = false;
     bool dirty = false;  // For incremental synthesis

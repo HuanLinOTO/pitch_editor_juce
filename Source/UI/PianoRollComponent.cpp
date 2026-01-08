@@ -122,6 +122,43 @@ void PianoRollComponent::drawNotes(juce::Graphics& g)
         // Border
         g.setColour(noteColor.brighter(0.3f));
         g.drawRoundedRectangle(x, y, w, h, 3.0f, 1.5f);
+
+        // Vibrato overlay (sine curve) - only when enabled
+        if (note.isVibratoEnabled() && note.getVibratoDepthSemitones() > 0.0001f && note.getVibratoRateHz() > 0.0001f)
+        {
+            constexpr float twoPi = 6.2831853071795864769f;
+            juce::Path vib;
+
+            const float startSec = framesToSeconds(note.getStartFrame());
+            const float endSec = framesToSeconds(note.getEndFrame());
+            const float baseMidi = note.getAdjustedMidiNote();
+            const float rate = note.getVibratoRateHz();
+            const float depth = note.getVibratoDepthSemitones();
+            const float phase = note.getVibratoPhaseRadians();
+
+            const float stepPx = 2.0f;
+            const int steps = std::max(2, static_cast<int>(w / stepPx));
+
+            for (int s = 0; s <= steps; ++s)
+            {
+                const float t01 = static_cast<float>(s) / static_cast<float>(steps);
+                const float sec = startSec + (endSec - startSec) * t01;
+                const float rel = sec - startSec;
+                const float vibSemi = depth * std::sin(twoPi * rate * rel + phase);
+                const float midi = baseMidi + vibSemi;
+
+                const float vx = sec * pixelsPerSecond;
+                const float vy = midiToY(midi) + h * 0.5f;
+
+                if (s == 0)
+                    vib.startNewSubPath(vx, vy);
+                else
+                    vib.lineTo(vx, vy);
+            }
+
+            g.setColour(juce::Colour(COLOR_NOTE_SELECTED).withAlpha(0.9f));
+            g.strokePath(vib, juce::PathStrokeType(2.0f));
+        }
     }
 }
 

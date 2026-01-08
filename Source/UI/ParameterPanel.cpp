@@ -24,13 +24,24 @@ ParameterPanel::ParameterPanel()
     
     // Setup sliders
     setupSlider(pitchOffsetSlider, pitchOffsetLabel, "Pitch Offset", -24.0, 24.0, 0.0);
+
+    // Vibrato
+    addAndMakeVisible(vibratoEnableButton);
+    vibratoEnableButton.addListener(this);
+    vibratoEnableButton.setColour(juce::ToggleButton::textColourId, juce::Colours::white);
+    vibratoEnableButton.setEnabled(false);
+
+    setupSlider(vibratoRateSlider, vibratoRateLabel, "Vibrato Rate", 0.1, 12.0, 5.0);
+    setupSlider(vibratoDepthSlider, vibratoDepthLabel, "Vibrato Depth", 0.0, 2.0, 0.0);
+    vibratoRateSlider.setEnabled(false);
+    vibratoDepthSlider.setEnabled(false);
     setupSlider(volumeSlider, volumeLabel, "Volume", -24.0, 12.0, 0.0);
     setupSlider(formantShiftSlider, formantShiftLabel, "Formant", -12.0, 12.0, 0.0);
     setupSlider(globalPitchSlider, globalPitchLabel, "Global Pitch", -24.0, 24.0, 0.0);
     
     // Section labels
     for (auto* label : { &pitchSectionLabel, &volumeSectionLabel, 
-                         &formantSectionLabel, &globalSectionLabel })
+                         &vibratoSectionLabel, &formantSectionLabel, &globalSectionLabel })
     {
         addAndMakeVisible(label);
         label->setColour(juce::Label::textColourId, juce::Colour(COLOR_PRIMARY));
@@ -97,6 +108,16 @@ void ParameterPanel::resized()
     bounds.removeFromTop(5);
     pitchOffsetLabel.setBounds(bounds.removeFromTop(20));
     pitchOffsetSlider.setBounds(bounds.removeFromTop(24));
+    bounds.removeFromTop(10);
+
+    // Vibrato section
+    vibratoSectionLabel.setBounds(bounds.removeFromTop(20));
+    bounds.removeFromTop(5);
+    vibratoEnableButton.setBounds(bounds.removeFromTop(22));
+    vibratoRateLabel.setBounds(bounds.removeFromTop(20));
+    vibratoRateSlider.setBounds(bounds.removeFromTop(24));
+    vibratoDepthLabel.setBounds(bounds.removeFromTop(20));
+    vibratoDepthSlider.setBounds(bounds.removeFromTop(24));
     bounds.removeFromTop(15);
     
     // Volume section
@@ -132,6 +153,22 @@ void ParameterPanel::sliderValueChanged(juce::Slider* slider)
         if (onParameterChanged)
             onParameterChanged();
     }
+    else if (slider == &vibratoRateSlider && selectedNote)
+    {
+        selectedNote->setVibratoRateHz(static_cast<float>(slider->getValue()));
+        selectedNote->markDirty();
+
+        if (onParameterChanged)
+            onParameterChanged();
+    }
+    else if (slider == &vibratoDepthSlider && selectedNote)
+    {
+        selectedNote->setVibratoDepthSemitones(static_cast<float>(slider->getValue()));
+        selectedNote->markDirty();
+
+        if (onParameterChanged)
+            onParameterChanged();
+    }
     else if (slider == &globalPitchSlider && project)
     {
         project->setGlobalPitchOffset(static_cast<float>(slider->getValue()));
@@ -143,7 +180,7 @@ void ParameterPanel::sliderValueChanged(juce::Slider* slider)
 
 void ParameterPanel::sliderDragEnded(juce::Slider* slider)
 {
-    if (slider == &pitchOffsetSlider && selectedNote)
+    if ((slider == &pitchOffsetSlider || slider == &vibratoRateSlider || slider == &vibratoDepthSlider) && selectedNote)
     {
         // Trigger incremental synthesis when slider drag ends
         if (onParameterEditFinished)
@@ -152,6 +189,23 @@ void ParameterPanel::sliderDragEnded(juce::Slider* slider)
     else if (slider == &globalPitchSlider && project)
     {
         // Global pitch changed, need full resynthesis
+        if (onParameterEditFinished)
+            onParameterEditFinished();
+    }
+}
+
+void ParameterPanel::buttonClicked(juce::Button* button)
+{
+    if (isUpdating) return;
+
+    if (button == &vibratoEnableButton && selectedNote)
+    {
+        selectedNote->setVibratoEnabled(vibratoEnableButton.getToggleState());
+        selectedNote->markDirty();
+
+        if (onParameterChanged)
+            onParameterChanged();
+
         if (onParameterEditFinished)
             onParameterEditFinished();
     }
@@ -188,12 +242,26 @@ void ParameterPanel::updateFromNote()
         
         pitchOffsetSlider.setValue(selectedNote->getPitchOffset());
         pitchOffsetSlider.setEnabled(true);
+
+        vibratoEnableButton.setEnabled(true);
+        vibratoEnableButton.setToggleState(selectedNote->isVibratoEnabled(), juce::dontSendNotification);
+        vibratoRateSlider.setEnabled(true);
+        vibratoDepthSlider.setEnabled(true);
+        vibratoRateSlider.setValue(selectedNote->getVibratoRateHz(), juce::dontSendNotification);
+        vibratoDepthSlider.setValue(selectedNote->getVibratoDepthSemitones(), juce::dontSendNotification);
     }
     else
     {
         noteInfoLabel.setText("No note selected", juce::dontSendNotification);
         pitchOffsetSlider.setValue(0.0);
         pitchOffsetSlider.setEnabled(false);
+
+        vibratoEnableButton.setEnabled(false);
+        vibratoEnableButton.setToggleState(false, juce::dontSendNotification);
+        vibratoRateSlider.setEnabled(false);
+        vibratoDepthSlider.setEnabled(false);
+        vibratoRateSlider.setValue(5.0, juce::dontSendNotification);
+        vibratoDepthSlider.setValue(0.0, juce::dontSendNotification);
     }
     
     isUpdating = false;

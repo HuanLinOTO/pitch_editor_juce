@@ -7,6 +7,7 @@
 
 class ParameterPanel : public juce::Component,
                        public juce::Slider::Listener,
+                       public juce::Button::Listener,
                        public juce::Timer
 {
 public:
@@ -18,6 +19,7 @@ public:
     
     void sliderValueChanged(juce::Slider* slider) override;
     void sliderDragEnded(juce::Slider* slider) override;
+    void buttonClicked(juce::Button* button) override;
     void timerCallback() override;
     
     void setProject(Project* proj);
@@ -54,6 +56,14 @@ private:
     juce::Label pitchSectionLabel { {}, "Pitch" };
     juce::Slider pitchOffsetSlider;
     juce::Label pitchOffsetLabel { {}, "Offset (semitones):" };
+
+    // Vibrato controls
+    juce::Label vibratoSectionLabel { {}, "Vibrato" };
+    juce::ToggleButton vibratoEnableButton { "Enable" };
+    juce::Slider vibratoRateSlider;
+    juce::Label vibratoRateLabel { {}, "Rate (Hz):" };
+    juce::Slider vibratoDepthSlider;
+    juce::Label vibratoDepthLabel { {}, "Depth (semitones):" };
     
     // Future parameters
     juce::Label volumeSectionLabel { {}, "Volume" };
