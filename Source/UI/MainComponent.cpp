@@ -269,11 +269,78 @@ void MainComponent::analyzeAudio()
     const float* samples = audioData.waveform.getReadPointer(0);
     int numSamples = audioData.waveform.getNumSamples();
     
+    // Compute mel spectrogram first (to know target frame count)
+    MelSpectrogram melComputer(SAMPLE_RATE, N_FFT, HOP_SIZE, NUM_MELS, FMIN, FMAX);
+    audioData.melSpectrogram = melComputer.compute(samples, numSamples);
+    
+    int targetFrames = static_cast<int>(audioData.melSpectrogram.size());
+    
+    DBG("Computed mel spectrogram: " << audioData.melSpectrogram.size() << " frames x " 
+        << (audioData.melSpectrogram.empty() ? 0 : audioData.melSpectrogram[0].size()) << " mels");
+    
     // Use FCPE if available, otherwise fall back to YIN
     if (useFCPE && fcpePitchDetector && fcpePitchDetector->isLoaded())
     {
         DBG("Using FCPE for pitch detection");
-        audioData.f0 = fcpePitchDetector->extractF0(samples, numSamples, SAMPLE_RATE);
+        std::vector<float> fcpeF0 = fcpePitchDetector->extractF0(samples, numSamples, SAMPLE_RATE);
+        
+        DBG("FCPE raw frames: " << fcpeF0.size() << ", target frames: " << targetFrames);
+        
+        // Resample FCPE F0 (100 fps @ 16kHz) to vocoder frame rate (86.1 fps @ 44.1kHz)
+        // FCPE: sr=16000, hop=160 -> 100 fps
+        // Vocoder: sr=44100, hop=512 -> 86.13 fps
+        if (!fcpeF0.empty() && targetFrames > 0)
+        {
+            audioData.f0.resize(targetFrames);
+            double ratio = static_cast<double>(fcpeF0.size()) / targetFrames;
+            
+            for (int i = 0; i < targetFrames; ++i)
+            {
+                double srcPos = i * ratio;
+                int srcIdx = static_cast<int>(srcPos);
+                double frac = srcPos - srcIdx;
+                
+                if (srcIdx + 1 < static_cast<int>(fcpeF0.size()))
+                {
+                    // Linear interpolation, but only between voiced frames
+                    float f0_a = fcpeF0[srcIdx];
+                    float f0_b = fcpeF0[srcIdx + 1];
+                    
+                    if (f0_a > 0 && f0_b > 0)
+                    {
+                        // Both voiced: interpolate
+                        audioData.f0[i] = static_cast<float>(f0_a * (1.0 - frac) + f0_b * frac);
+                    }
+                    else if (f0_a > 0)
+                    {
+                        // Only first voiced
+                        audioData.f0[i] = f0_a;
+                    }
+                    else if (f0_b > 0)
+                    {
+                        // Only second voiced
+                        audioData.f0[i] = f0_b;
+                    }
+                    else
+                    {
+                        // Both unvoiced
+                        audioData.f0[i] = 0.0f;
+                    }
+                }
+                else if (srcIdx < static_cast<int>(fcpeF0.size()))
+                {
+                    audioData.f0[i] = fcpeF0[srcIdx];
+                }
+                else
+                {
+                    audioData.f0[i] = 0.0f;
+                }
+            }
+        }
+        else
+        {
+            audioData.f0.clear();
+        }
         
         // Create voiced mask (non-zero F0 = voiced)
         audioData.voicedMask.resize(audioData.f0.size());
@@ -281,6 +348,8 @@ void MainComponent::analyzeAudio()
         {
             audioData.voicedMask[i] = audioData.f0[i] > 0;
         }
+        
+        DBG("Resampled F0 frames: " << audioData.f0.size());
     }
     else
     {
@@ -289,13 +358,6 @@ void MainComponent::analyzeAudio()
         audioData.f0 = std::move(f0Values);
         audioData.voicedMask = std::move(voicedValues);
     }
-    
-    // Compute mel spectrogram
-    MelSpectrogram melComputer(SAMPLE_RATE, N_FFT, HOP_SIZE, NUM_MELS, FMIN, FMAX);
-    audioData.melSpectrogram = melComputer.compute(samples, numSamples);
-    
-    DBG("Computed mel spectrogram: " << audioData.melSpectrogram.size() << " frames x " 
-        << (audioData.melSpectrogram.empty() ? 0 : audioData.melSpectrogram[0].size()) << " mels");
     
     // Load vocoder model
     auto modelPath = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
