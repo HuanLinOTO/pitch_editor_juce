@@ -8,6 +8,7 @@ JUCE/
 # IDE files
 .vs/
 .vscode/
+.idea/
 *.user
 *.suo
 *.sdf
