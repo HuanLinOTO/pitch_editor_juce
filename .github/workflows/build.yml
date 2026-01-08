@@ -44,11 +44,6 @@ jobs:
         Expand-Archive -Path "onnxruntime.zip" -DestinationPath "."
         Rename-Item "onnxruntime-win-x64-${{ env.ONNX_VERSION }}" "onnxruntime"
     
-    - name: Download PC-NSF-HiFiGAN Model
-      run: |
-        New-Item -ItemType Directory -Force -Path models
-        Invoke-WebRequest -Uri "https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.onnx" -OutFile "models/pc_nsf_hifigan.onnx"
-    
     - name: Configure CMake
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DONNXRUNTIME_ROOT="./onnxruntime"
@@ -110,11 +105,6 @@ jobs:
         Copy-Item "onnxruntime-dml-nuget/runtimes/win-x64/native/onnxruntime.lib" onnxruntime/lib/
         Copy-Item "onnxruntime-dml-nuget/runtimes/win-x64/native/DirectML.dll" onnxruntime/lib/
     
-    - name: Download PC-NSF-HiFiGAN Model
-      run: |
-        New-Item -ItemType Directory -Force -Path models
-        Invoke-WebRequest -Uri "https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.onnx" -OutFile "models/pc_nsf_hifigan.onnx"
-    
     - name: Configure CMake
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DONNXRUNTIME_ROOT="./onnxruntime"
@@ -165,11 +155,6 @@ jobs:
         curl -L "https://github.com/microsoft/onnxruntime/releases/download/v${{ env.ONNX_VERSION }}/onnxruntime-osx-universal2-${{ env.ONNX_VERSION }}.tgz" -o onnxruntime.tgz
         tar -xzf onnxruntime.tgz
         mv onnxruntime-osx-universal2-${{ env.ONNX_VERSION }} onnxruntime
-    
-    - name: Download PC-NSF-HiFiGAN Model
-      run: |
-        mkdir -p models
-        curl -L "https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.onnx" -o models/pc_nsf_hifigan.onnx
     
     - name: Configure CMake
       run: |
@@ -245,11 +230,6 @@ jobs:
         curl -L "https://github.com/microsoft/onnxruntime/releases/download/v${{ env.ONNX_VERSION }}/onnxruntime-linux-x64-${{ env.ONNX_VERSION }}.tgz" -o onnxruntime.tgz
         tar -xzf onnxruntime.tgz
         mv onnxruntime-linux-x64-${{ env.ONNX_VERSION }} onnxruntime
-    
-    - name: Download PC-NSF-HiFiGAN Model
-      run: |
-        mkdir -p models
-        curl -L "https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.onnx" -o models/pc_nsf_hifigan.onnx
     
     - name: Configure CMake
       run: |
