@@ -1,124 +1,138 @@
 <div align="center">
-  <h1> ♥ 大市修 ♥ <br/> PC-NSF-HifiGAN Pitch Editor </h1>
+  <h1> Pitch Editor </h1>
 
   <img src="logo.png" alt="Logo" width="300" />
 
   <p>
-    <em>大市修于市，音符修于心</em>
+    A lightweight pitch editor built with JUCE framework, featuring FCPE pitch detection and neural vocoder synthesis.
   </p>
 
   <p>
-    <small>A lightweight pitch editor inspired by Melodyne, built with the JUCE framework for PC-NSF-HiFiGAN vocoder integration.</small>
+    <a href="#features">Features</a> •
+    <a href="#building">Building</a> •
+    <a href="#usage">Usage</a> •
+    <a href="#keyboard-shortcuts">Shortcuts</a>
   </p>
 </div>
 
 ## Features
 
 - Piano roll interface for visualizing and editing pitch
-- Waveform display
-- YIN-based pitch detection
-- Note segmentation
+- FCPE (Fast Context-aware Pitch Estimation) neural pitch detection
+- ONNX Runtime vocoder integration with real-time preview
+- GPU acceleration support (CUDA, DirectML, CoreML)
+- VST3 and AU plugin formats with ARA support
+- Multi-language UI (English, 简体中文, 繁體中文, 日本語)
+- Undo/redo for pitch modifications
 - Real-time audio playback
-- Pitch offset editing per note
-- Import/Export WAV files
+- Import WAV/MP3/FLAC, export WAV
 
 ## Prerequisites
 
-- CMake 3.22 or later
+- CMake 3.22+
 - C++17 compatible compiler
-- JUCE framework (will be cloned as submodule)
+- Git (for submodules)
 
-### Windows
+### Platform-specific
 
-- Visual Studio 2019 or later with C++ workload
-- Windows SDK
-
-### macOS
-
-- Xcode with command line tools
-
-### Linux
-
-- GCC or Clang
-- ALSA development libraries
+| Platform | Requirements |
+|----------|-------------|
+| Windows | Visual Studio 2019+, Windows SDK |
+| macOS | Xcode with command line tools |
+| Linux | GCC/Clang, ALSA dev libraries |
 
 ## Building
 
-### 1. Clone JUCE
-
-First, clone the JUCE framework into the project directory:
+### Quick Build
 
 ```bash
+# Clone with submodules
+git clone --recursive https://github.com/user/pitch_editor_juce.git
 cd pitch_editor_juce
-git clone https://github.com/juce-framework/JUCE.git
+
+# Build
+./build.sh
 ```
 
-### 2. Configure and Build
-
-#### Windows (Visual Studio)
+### Manual Build
 
 ```bash
-mkdir build
-cd build
-cmake -G "Visual Studio 17 2022" -A x64 ..
-cmake --build . --config Release
+# Initialize submodules
+git submodule update --init --recursive
+
+# Configure
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build --config Release
 ```
 
-#### macOS / Linux
+### Build Options
 
-```bash
-mkdir build
-cd build
-cmake ..
-cmake --build . --config Release
-```
+| Option | Description |
+|--------|-------------|
+| `ARA_SDK_PATH` | Path to ARA SDK for ARA plugin support |
+| `ONNXRUNTIME_URL` | Custom ONNX Runtime download URL |
 
-### 3. Run
+### Output
 
-The executable will be in `build/PitchEditor_artefacts/Release/` (or similar path depending on platform).
+Build artifacts are in `build/PitchEditorPlugin_artefacts/Release/`:
+- `Pitch Editor.app` - Standalone application (macOS)
+- `Pitch Editor.vst3` - VST3 plugin
+- `Pitch Editor.component` - AU plugin (macOS)
+
+## Usage
+
+1. **Open**: Load audio file (WAV/MP3/FLAC)
+2. **Analyze**: Audio is automatically analyzed for pitch
+3. **Edit**:
+   - Select mode: Click notes to select, drag to adjust pitch
+   - Draw mode: Draw directly on pitch curve
+4. **Preview**: Changes are synthesized in real-time
+5. **Export**: Save modified audio as WAV
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Space` | Play/Pause |
+| `Escape` | Stop / Exit draw mode |
+| `D` | Toggle draw mode |
+| `Cmd/Ctrl+Z` | Undo |
+| `Cmd/Ctrl+Shift+Z` | Redo |
+| `Cmd/Ctrl+S` | Save project |
+| `Mouse wheel` | Scroll horizontally |
+| `Shift+wheel` | Scroll vertically |
+| `Cmd/Ctrl+wheel` | Zoom |
+
+## Settings
+
+Access via Edit > Settings:
+
+- **Language**: UI language selection
+- **Device**: Inference device (CPU/CUDA/DirectML/CoreML)
+- **GPU Device**: GPU selection for multi-GPU systems
+- **Threads**: CPU thread count (0 = auto)
+- **Audio**: Output device settings (standalone only)
 
 ## Project Structure
 
 ```
 pitch_editor_juce/
-├── CMakeLists.txt              # Build configuration
 ├── Source/
-│   ├── Main.cpp                # Application entry point
-│   ├── Audio/
-│   │   ├── AudioEngine.h/cpp   # Audio playback engine
-│   │   ├── PitchDetector.h/cpp # YIN pitch detection
-│   │   └── Vocoder.h/cpp       # Vocoder wrapper (placeholder)
-│   ├── Models/
-│   │   ├── Note.h/cpp          # Note representation
-│   │   └── Project.h/cpp       # Project container
-│   ├── UI/
-│   │   ├── MainComponent.h/cpp # Main application component
-│   │   ├── PianoRollComponent.h/cpp
-│   │   ├── WaveformComponent.h/cpp
-│   │   ├── ToolbarComponent.h/cpp
-│   │   └── ParameterPanel.h/cpp
-│   └── Utils/
-│       ├── Constants.h         # Audio constants
-│       └── MelSpectrogram.h/cpp
-└── JUCE/                       # JUCE framework (clone here)
+│   ├── Audio/          # Audio engine, pitch detection, vocoder
+│   ├── Models/         # Note, Project data models
+│   ├── UI/             # UI components
+│   ├── Utils/          # Constants, localization, undo manager
+│   └── Plugin/         # VST3/AU plugin wrapper
+├── Resources/
+│   └── lang/           # Localization files
+├── third_party/
+│   ├── JUCE/           # JUCE framework (submodule)
+│   └── ARA_SDK/        # ARA SDK (submodule, optional)
+└── CMakeLists.txt
 ```
-
-## Usage
-
-1. **Open File**: Click "Open" to load a WAV/MP3/FLAC file
-2. **View**: Use mouse wheel to scroll, Ctrl+wheel to zoom
-3. **Edit**: Click and drag notes to adjust pitch offset
-4. **Playback**: Use Play/Pause/Stop buttons
-5. **Export**: Click "Export" to save the modified audio
-
-## Keyboard Shortcuts
-
-- `Space`: Play/Pause
-- `Ctrl+O`: Open file
-- `Ctrl+S`: Export file
-- `Ctrl+Mouse Wheel`: Zoom
-- `Shift+Mouse Wheel`: Scroll vertically
 
 ## License
 
-This project is part of the PC-NSF-HiFiGAN vocoder demo.
+MIT License
