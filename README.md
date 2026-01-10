@@ -132,7 +132,3 @@ pitch_editor_juce/
 │   └── ARA_SDK/        # ARA SDK (submodule, optional)
 └── CMakeLists.txt
 ```
-
-## License
-
-MIT License
