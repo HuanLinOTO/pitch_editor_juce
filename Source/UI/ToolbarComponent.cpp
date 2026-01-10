@@ -146,13 +146,12 @@ void ToolbarComponent::resized()
     // Progress bar (use the remaining middle area so it won't cover buttons)
     if (showingProgress)
     {
-        auto progressArea = bounds;
-        if (progressArea.getWidth() < 220)
-            progressArea = getLocalBounds().reduced(200, 6);
+        auto progressArea = bounds.withWidth(std::min(300, bounds.getWidth()));
 
-        const int labelWidth = std::min(160, std::max(80, progressArea.getWidth() / 4));
-        progressLabel.setBounds(progressArea.removeFromLeft(labelWidth));
-        progressBar.setBounds(progressArea);
+        // Vertical layout: status text above, progress bar below
+        const int progressBarHeight = progressArea.getHeight() / 2;
+        progressLabel.setBounds(progressArea.removeFromTop(progressArea.getHeight() - progressBarHeight));
+        progressBar.setBounds(progressArea.withHeight(progressBarHeight));
     }
 }
 

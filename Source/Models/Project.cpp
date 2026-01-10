@@ -438,20 +438,20 @@ std::vector<float> Project::getAdjustedF0ForRange(int startFrame, int endFrame) 
 {
     if (audioData.f0.empty())
         return {};
-    
+
     // Clamp range
     startFrame = std::max(0, startFrame);
     endFrame = std::min(endFrame, static_cast<int>(audioData.f0.size()));
-    
+
     if (startFrame >= endFrame)
         return {};
-    
+
     int rangeSize = endFrame - startFrame;
-    
-    // Get slice of original F0
-    std::vector<float> adjustedF0(audioData.f0.begin() + startFrame, 
+
+    // Get slice of F0 (already contains all pitch edits from dragging/drawing)
+    std::vector<float> adjustedF0(audioData.f0.begin() + startFrame,
                                    audioData.f0.begin() + endFrame);
-    
+
     // Apply global pitch offset
     if (globalPitchOffset != 0.0f)
     {
@@ -462,74 +462,41 @@ std::vector<float> Project::getAdjustedF0ForRange(int startFrame, int endFrame) 
                 f *= globalRatio;
         }
     }
-    
-    // Calculate per-frame ratios from notes (for the range)
+
+    // Apply vibrato (note: pitchOffset is always 0 after drag, edits are baked into f0)
     std::vector<float> frameRatios(rangeSize, 1.0f);
-    
+
     for (const auto& note : notes)
     {
-        const bool hasPitchOffset = std::abs(note.getPitchOffset()) > 0.0001f;
-        const bool hasVibrato = note.isVibratoEnabled() && note.getVibratoDepthSemitones() > 0.0001f && note.getVibratoRateHz() > 0.0001f;
+        const bool hasVibrato = note.isVibratoEnabled() &&
+                                note.getVibratoDepthSemitones() > 0.0001f &&
+                                note.getVibratoRateHz() > 0.0001f;
 
-        if (hasPitchOffset || hasVibrato)
+        if (hasVibrato)
         {
             int noteStart = note.getStartFrame();
             int noteEnd = note.getEndFrame();
 
-            DBG("Note pitch offset: " << note.getPitchOffset() << " frames: " << noteStart << "-" << noteEnd);
-
             // Calculate overlap with our range
             int overlapStart = std::max(noteStart, startFrame) - startFrame;
             int overlapEnd = std::min(noteEnd, endFrame) - startFrame;
-            
+
             for (int i = overlapStart; i < overlapEnd; ++i)
             {
                 if (i >= 0 && i < rangeSize)
                 {
                     const int globalFrame = startFrame + i;
-                    float ratio = 1.0f;
-
-                    if (hasPitchOffset)
-                        ratio *= std::pow(2.0f, note.getPitchOffset() / 12.0f);
-
-                    if (hasVibrato)
-                    {
-                        const float t = framesToSeconds(globalFrame - noteStart);
-                        const float vib = note.getVibratoDepthSemitones() * std::sin(twoPi * note.getVibratoRateHz() * t + note.getVibratoPhaseRadians());
-                        ratio *= std::pow(2.0f, vib / 12.0f);
-                    }
-
-                    frameRatios[i] = ratio;
+                    const float t = framesToSeconds(globalFrame - noteStart);
+                    const float vib = note.getVibratoDepthSemitones() *
+                                     std::sin(twoPi * note.getVibratoRateHz() * t +
+                                             note.getVibratoPhaseRadians());
+                    frameRatios[i] = std::pow(2.0f, vib / 12.0f);
                 }
             }
         }
     }
-    
-    // Apply smoothing at transitions between different pitch offsets
-    // Also handle note boundaries with UV region crossfading to avoid F0 jumps
-    const int smoothFrames = 20;  // ~50ms at 400fps for smooth transitions
-    const int maxUVSearchRange = 20;  // Search range for UV regions
 
-    // Helper to find nearest UV region
-    auto findNearestUVRegion = [&](int centerFrame) -> int {
-        for (int offset = 0; offset <= maxUVSearchRange; ++offset) {
-            for (int dir = -1; dir <= 1; dir += 2) {
-                int frame = centerFrame + dir * offset;
-                if (frame >= 0 && frame < static_cast<int>(audioData.f0.size())) {
-                    bool isUnvoiced = (audioData.f0[frame] <= 0.0f);
-                    if (!isUnvoiced && frame < static_cast<int>(audioData.voicedMask.size())) {
-                        isUnvoiced = !audioData.voicedMask[frame];
-                    }
-                    if (isUnvoiced) {
-                        return frame;
-                    }
-                }
-            }
-        }
-        return -1;
-    };
-
-    // First, apply ratios to get initial adjusted F0
+    // Apply vibrato ratios with smoothing at transitions
     for (int i = 0; i < rangeSize; ++i)
     {
         size_t globalIdx = static_cast<size_t>(startFrame + i);
@@ -538,127 +505,49 @@ std::vector<float> Project::getAdjustedF0ForRange(int startFrame, int endFrame) 
             adjustedF0[i] *= frameRatios[i];
         }
     }
-
-    // Now smooth transitions, especially at note boundaries
-    for (int i = 1; i < rangeSize; ++i)
-    {
-        float diff = std::abs(frameRatios[i] - frameRatios[i-1]);
-        if (diff > 0.001f)
-        {
-            // Found a transition point (likely a note boundary)
-            int globalFrame = startFrame + i;
-            
-            // Check if this is a note boundary
-            bool isNoteBoundary = false;
-            for (const auto& note : notes)
-            {
-                if (note.getStartFrame() == globalFrame || note.getEndFrame() == globalFrame)
-                {
-                    isNoteBoundary = true;
-                    break;
-                }
-            }
-            
-            if (isNoteBoundary)
-            {
-                // At note boundary: try to find UV region for seamless splicing
-                int uvFrame = findNearestUVRegion(globalFrame);
-                
-                if (uvFrame >= 0 && uvFrame >= startFrame && uvFrame < startFrame + rangeSize)
-                {
-                    // Found UV region within range: use crossfade around it
-                    int crossfadeFrames = 15;
-                    int uvLocalIdx = uvFrame - startFrame;
-                    
-                    // Determine crossfade region centered around UV frame
-                    int crossfadeStart = std::max(0, uvLocalIdx - crossfadeFrames);
-                    int crossfadeEnd = std::min(rangeSize, uvLocalIdx + crossfadeFrames);
-                    
-                    // Get original F0 values before adjustment (for crossfade)
-                    std::vector<float> originalF0InRange(crossfadeEnd - crossfadeStart);
-                    for (int j = crossfadeStart; j < crossfadeEnd; ++j)
-                    {
-                        int globalIdx = startFrame + j;
-                        if (globalIdx >= 0 && globalIdx < static_cast<int>(audioData.f0.size()))
-                        {
-                            originalF0InRange[j - crossfadeStart] = audioData.f0[globalIdx];
-                        }
-                    }
-                    
-                    // Apply crossfade: blend original and adjusted F0
-                    // Direction: from original (left) to adjusted (right) when crossing UV region
-                    for (int j = crossfadeStart; j < crossfadeEnd; ++j)
-                    {
-                        // Calculate crossfade weight: 0 = original, 1 = adjusted
-                        float t;
-                        if (j < uvLocalIdx)
-                        {
-                            // Before UV: fade from original to adjusted
-                            t = static_cast<float>(j - crossfadeStart) / (uvLocalIdx - crossfadeStart);
-                        }
-                        else
-                        {
-                            // After UV: fade from adjusted to original (or keep adjusted if in note)
-                            t = 1.0f - static_cast<float>(j - uvLocalIdx) / (crossfadeEnd - uvLocalIdx);
-                        }
-                        t = std::clamp(t, 0.0f, 1.0f);
-                        
-                        // Use smooth curve (ease-in-out)
-                        t = t * t * (3.0f - 2.0f * t);
-                        
-                        float originalF0 = originalF0InRange[j - crossfadeStart];
-                        float adjustedF0Val = adjustedF0[j];
-                        
-                        // Only crossfade if both values are valid
-                        if (originalF0 > 0.0f && adjustedF0Val > 0.0f)
-                        {
-                            adjustedF0[j] = originalF0 * (1.0f - t) + adjustedF0Val * t;
-                        }
-                        else if (adjustedF0Val > 0.0f)
-                        {
-                            adjustedF0[j] = adjustedF0Val;  // Use adjusted if original is invalid
-                        }
-                        else if (originalF0 > 0.0f)
-                        {
-                            adjustedF0[j] = originalF0;  // Use original if adjusted is invalid
-                        }
-                    }
-                    
-                    // Skip past the crossfaded region
-                    i = crossfadeEnd - 1;
-                    continue;
-                }
-            }
-            
-            // No UV region found or not a note boundary: use standard smoothing
-            int smoothStart = std::max(0, i - smoothFrames);
-            int smoothEnd = std::min(rangeSize, i + smoothFrames);
-
-            float valBefore = frameRatios[smoothStart];
-            float valAfter = frameRatios[smoothEnd - 1];
-
-            // Use cosine interpolation for smoother transitions
-            for (int j = smoothStart; j < smoothEnd; ++j)
-            {
-                float t = static_cast<float>(j - smoothStart) / (smoothEnd - smoothStart - 1);
-                // Cosine interpolation: smoother than linear
-                float smoothT = (1.0f - std::cos(t * 3.14159f)) * 0.5f;
-                float newRatio = valBefore + smoothT * (valAfter - valBefore);
-                
-                // Re-apply ratio to F0
-                size_t globalIdx = static_cast<size_t>(startFrame + j);
-                if (globalIdx < audioData.voicedMask.size() && audioData.voicedMask[globalIdx])
-                {
-                    // Get original F0 and apply smoothed ratio
-                    float originalF0 = audioData.f0[globalIdx];
-                    adjustedF0[j] = originalF0 * newRatio;
-                }
-            }
-
-            // Skip past the smoothed region
-            i = smoothEnd - 1;
-        }
-    }
     
+    // Apply additional smoothing for smoother pitch transitions
+    // This helps reduce artifacts when notes change or vibrato is applied
+    const int smoothWindow = 5;
+    if (rangeSize > smoothWindow * 2)
+    {
+        std::vector<float> smoothedF0 = adjustedF0;
+        
+        for (int i = smoothWindow; i < rangeSize - smoothWindow; ++i)
+        {
+            size_t globalIdx = static_cast<size_t>(startFrame + i);
+            if (globalIdx < audioData.voicedMask.size() && audioData.voicedMask[globalIdx])
+            {
+                // Weighted average in log domain for musical accuracy
+                float logSum = 0.0f;
+                float weightSum = 0.0f;
+                
+                for (int j = -smoothWindow; j <= smoothWindow; ++j)
+                {
+                    int idx = i + j;
+                    size_t globalIdxJ = static_cast<size_t>(startFrame + idx);
+                    
+                    if (idx >= 0 && idx < rangeSize && 
+                        globalIdxJ < audioData.voicedMask.size() && 
+                        audioData.voicedMask[globalIdxJ] && 
+                        adjustedF0[idx] > 0.0f)
+                    {
+                        // Gaussian-like weight (closer frames have more weight)
+                        float weight = std::exp(-0.5f * (j * j) / (smoothWindow * smoothWindow / 2.0f));
+                        logSum += std::log(adjustedF0[idx]) * weight;
+                        weightSum += weight;
+                    }
+                }
+                
+                if (weightSum > 0.0f)
+                {
+                    smoothedF0[i] = std::exp(logSum / weightSum);
+                }
+            }
+        }
+        
+        adjustedF0 = smoothedF0;
+    }
+
     return adjustedF0;
 }

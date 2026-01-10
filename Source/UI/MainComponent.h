@@ -21,7 +21,8 @@
 class MainComponent : public juce::Component,
                       public juce::Timer,
                       public juce::KeyListener,
-                      public juce::MenuBarModel
+                      public juce::MenuBarModel,
+                      public juce::FileDragAndDropTarget
 {
 public:
     explicit MainComponent(bool enableAudioDevice = true);
@@ -44,6 +45,10 @@ public:
     juce::StringArray getMenuBarNames() override;
     juce::PopupMenu getMenuForIndex(int menuIndex, const juce::String& menuName) override;
     void menuItemSelected(int menuItemID, int topLevelMenuIndex) override;
+
+    // FileDragAndDropTarget
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
 
     // Plugin mode
     bool isPluginMode() const { return !enableAudioDeviceFlag; }

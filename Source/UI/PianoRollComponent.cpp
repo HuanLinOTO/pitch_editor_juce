@@ -52,7 +52,7 @@ void PianoRollComponent::paint(juce::Graphics &g) {
     drawBackgroundWaveform(g, mainArea);
   }
 
-  // Draw scrolled content (grid, notes, pitch curves, cursor)
+  // Draw scrolled content (grid, notes, pitch curves)
   {
     juce::Graphics::ScopedSaveState saveState(g);
     g.reduceClipRegion(mainArea);
@@ -62,24 +62,20 @@ void PianoRollComponent::paint(juce::Graphics &g) {
     drawGrid(g);
     drawNotes(g);
     drawPitchCurves(g);
-    drawCursor(g);
   }
 
   // Draw timeline (above grid, scrolls horizontally)
   drawTimeline(g);
 
-  // Draw cursor triangle in timeline area (pointing down)
+  // Draw unified cursor line (spans from timeline through grid)
   {
     float x = static_cast<float>(pianoKeysWidth) + timeToX(cursorTime) -
               static_cast<float>(scrollX);
-    constexpr float triSize = 5.0f;
-    juce::Path triangle;
-    triangle.addTriangle(
-        x - triSize, static_cast<float>(timelineHeight) - triSize * 1.5f,
-        x + triSize, static_cast<float>(timelineHeight) - triSize * 1.5f, x,
-        static_cast<float>(timelineHeight));
+    float cursorTop = 0.0f;
+    float cursorBottom = static_cast<float>(getHeight() - 8); // Exclude scrollbar
+
     g.setColour(juce::Colours::white);
-    g.fillPath(triangle);
+    g.fillRect(x - 0.5f, cursorTop, 1.0f, cursorBottom);
   }
 
   // Draw piano keys
@@ -310,6 +306,10 @@ void PianoRollComponent::drawNotes(juce::Graphics &g) {
   double visibleEndTime = (scrollX + getWidth()) / pixelsPerSecond;
 
   for (auto &note : project->getNotes()) {
+    // Skip rest notes (they have no pitch)
+    if (note.isRest())
+      continue;
+
     // Viewport culling: skip notes outside visible area
     double noteStartTime = framesToSeconds(note.getStartFrame());
     double noteEndTime = framesToSeconds(note.getEndFrame());
@@ -562,8 +562,20 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
   float adjustedX = e.x - pianoKeysWidth + static_cast<float>(scrollX);
   float adjustedY = e.y - timelineHeight + static_cast<float>(scrollY);
 
-  // Ignore clicks in timeline area
-  if (e.y < timelineHeight)
+  // Handle timeline clicks - seek to position
+  if (e.y < timelineHeight && e.x >= pianoKeysWidth) {
+    double time = xToTime(adjustedX);
+    cursorTime = std::max(0.0, time);
+
+    if (onSeek)
+      onSeek(cursorTime);
+
+    repaint();
+    return;
+  }
+
+  // Ignore clicks outside main area
+  if (e.y < timelineHeight || e.x < pianoKeysWidth)
     return;
 
   if (editMode == EditMode::Draw) {
@@ -594,11 +606,11 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
     if (onNoteSelected)
       onNoteSelected(note);
 
-    // Calculate delta pitch before starting drag (if not already calculated)
-    if (!note->hasDeltaPitch() && project)
+    // Calculate delta pitch before starting drag
+    // Use baseF0 to preserve original pitch curve shape
+    if (project)
     {
         auto& audioData = project->getAudioData();
-        const auto& baseF0 = audioData.baseF0.empty() ? audioData.f0 : audioData.baseF0;
         int startFrame = note->getStartFrame();
         int endFrame = note->getEndFrame();
         int numFrames = endFrame - startFrame;
@@ -606,6 +618,8 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
         std::vector<float> delta(numFrames, 0.0f);
         float baseMidi = note->getMidiNote();
 
+        // Use baseF0 (original detected pitch) to preserve curve shape
+        const auto& baseF0 = audioData.baseF0.empty() ? audioData.f0 : audioData.baseF0;
         for (int i = 0; i < numFrames; ++i)
         {
             int globalFrame = startFrame + i;
@@ -730,15 +744,13 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
           for (int i = startFrame; i < endFrame && i < f0Size; ++i) {
             int localIdx = i - startFrame;
           float d = (localIdx < static_cast<int>(delta.size())) ? delta[localIdx] : 0.0f;
-          // Reconstruct from base pitch rather than cumulative edits
-          float baseMidi = (i < static_cast<int>(baseF0.size()) && baseF0[i] > 0.0f)
-                               ? freqToMidi(baseF0[i])
-                               : newBaseMidi;
-          float targetMidi = baseMidi + (newBaseMidi - originalMidiNote) + d;
+          // Apply new base MIDI note + delta deviation
+          float targetMidi = newBaseMidi + d;
           audioData.f0[i] = midiToFreq(targetMidi);
           }
 
           // Set F0 dirty range for synthesis
+          // Note: Boundary smoothing is handled by the UV crossfade mechanism below (lines 840-960)
           project->setF0DirtyRange(startFrame, endFrame);
         } else {
           // Fallback: apply uniform shift when no delta map
@@ -974,25 +986,85 @@ void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent &e) {
 
 void PianoRollComponent::mouseWheelMove(const juce::MouseEvent &e,
                                         const juce::MouseWheelDetails &wheel) {
-  // Sensitivity: smooth scrolling (trackpad) uses smaller deltas, mouse wheel
-  // uses larger
   float scrollMultiplier = wheel.isSmooth ? 200.0f : 80.0f;
 
-  // Cmd/Ctrl + scroll = zoom
+  bool isOverPianoKeys = e.x < pianoKeysWidth;
+  bool isOverTimeline = e.y < timelineHeight;
+
+  // Hover-based zoom (no modifier keys needed)
+  if (!e.mods.isCommandDown() && !e.mods.isCtrlDown()) {
+    // Over piano keys: vertical zoom
+    if (isOverPianoKeys) {
+      float zoomFactor = 1.0f + wheel.deltaY * 0.3f;
+      float newPps = pixelsPerSemitone * zoomFactor;
+      newPps = juce::jlimit(MIN_PIXELS_PER_SEMITONE, MAX_PIXELS_PER_SEMITONE, newPps);
+      pixelsPerSemitone = newPps;
+      updateScrollBars();
+      repaint();
+      return;
+    }
+
+    // Over timeline: horizontal zoom
+    if (isOverTimeline) {
+      float zoomFactor = 1.0f + wheel.deltaY * 0.3f;
+      float newPps = pixelsPerSecond * zoomFactor;
+      newPps = juce::jlimit(MIN_PIXELS_PER_SECOND, MAX_PIXELS_PER_SECOND, newPps);
+      pixelsPerSecond = newPps;
+      updateScrollBars();
+      repaint();
+      if (onZoomChanged)
+        onZoomChanged(pixelsPerSecond);
+      return;
+    }
+
+    // Normal scrolling in grid area
+    float deltaX = wheel.deltaX;
+    float deltaY = wheel.deltaY;
+
+    if (e.mods.isShiftDown() && std::abs(deltaX) < 0.001f) {
+      deltaX = deltaY;
+      deltaY = 0.0f;
+    }
+
+    if (std::abs(deltaX) > 0.001f) {
+      double newScrollX = scrollX - deltaX * scrollMultiplier;
+      newScrollX = std::max(0.0, newScrollX);
+      horizontalScrollBar.setCurrentRangeStart(newScrollX);
+    }
+
+    if (std::abs(deltaY) > 0.001f) {
+      double newScrollY = scrollY - deltaY * scrollMultiplier;
+      verticalScrollBar.setCurrentRangeStart(newScrollY);
+    }
+    return;
+  }
+
+  // Key-based zoom in grid area
   if (e.mods.isCommandDown() || e.mods.isCtrlDown()) {
     float zoomFactor = 1.0f + wheel.deltaY * 0.3f;
 
     if (e.mods.isShiftDown()) {
-      // Vertical zoom
-      setPixelsPerSemitone(pixelsPerSemitone * zoomFactor);
+      // Vertical zoom - center on mouse position
+      float mouseY = static_cast<float>(e.y - timelineHeight);
+      float midiAtMouse = yToMidi(mouseY + static_cast<float>(scrollY));
+
+      float newPps = pixelsPerSemitone * zoomFactor;
+      newPps = juce::jlimit(MIN_PIXELS_PER_SEMITONE, MAX_PIXELS_PER_SEMITONE, newPps);
+
+      // Adjust scroll to keep mouse position stable
+      float newMouseY = midiToY(midiAtMouse);
+      scrollY = std::max(0.0, static_cast<double>(newMouseY - mouseY));
+
+      pixelsPerSemitone = newPps;
+      updateScrollBars();
+      repaint();
     } else {
       // Horizontal zoom - center on mouse position
       float mouseX = static_cast<float>(e.x - pianoKeysWidth);
       double timeAtMouse = xToTime(mouseX + static_cast<float>(scrollX));
 
       float newPps = pixelsPerSecond * zoomFactor;
-      newPps =
-          juce::jlimit(MIN_PIXELS_PER_SECOND, MAX_PIXELS_PER_SECOND, newPps);
+      newPps = juce::jlimit(MIN_PIXELS_PER_SECOND, MAX_PIXELS_PER_SECOND, newPps);
 
       // Adjust scroll to keep mouse position stable
       float newMouseX = static_cast<float>(timeAtMouse * newPps);
@@ -1005,36 +1077,12 @@ void PianoRollComponent::mouseWheelMove(const juce::MouseEvent &e,
       if (onZoomChanged)
         onZoomChanged(pixelsPerSecond);
     }
-    return;
-  }
-
-  // Natural scrolling: use deltaX for horizontal, deltaY for vertical
-  // On trackpads, horizontal swipe gives deltaX directly
-  float deltaX = wheel.deltaX;
-  float deltaY = wheel.deltaY;
-
-  // Shift + scroll = force horizontal scroll (for mouse wheel users)
-  if (e.mods.isShiftDown() && std::abs(deltaX) < 0.001f) {
-    deltaX = deltaY;
-    deltaY = 0.0f;
-  }
-
-  // Apply scrolling
-  if (std::abs(deltaX) > 0.001f) {
-    double newScrollX = scrollX - deltaX * scrollMultiplier;
-    newScrollX = std::max(0.0, newScrollX);
-    horizontalScrollBar.setCurrentRangeStart(newScrollX);
-  }
-
-  if (std::abs(deltaY) > 0.001f) {
-    double newScrollY = scrollY - deltaY * scrollMultiplier;
-    verticalScrollBar.setCurrentRangeStart(newScrollY);
   }
 }
 
 void PianoRollComponent::mouseMagnify(const juce::MouseEvent &e,
                                       float scaleFactor) {
-  // Pinch-to-zoom on trackpad
+  // Pinch-to-zoom on trackpad - horizontal zoom, center on mouse position
   float mouseX = static_cast<float>(e.x - pianoKeysWidth);
   double timeAtMouse = xToTime(mouseX + static_cast<float>(scrollX));
 
@@ -1200,6 +1248,10 @@ Note *PianoRollComponent::findNoteAt(float x, float y) {
     return nullptr;
 
   for (auto &note : project->getNotes()) {
+    // Skip rest notes
+    if (note.isRest())
+      continue;
+
     float noteX = framesToSeconds(note.getStartFrame()) * pixelsPerSecond;
     float noteW = framesToSeconds(note.getDurationFrames()) * pixelsPerSecond;
     float noteY = midiToY(note.getAdjustedMidiNote());

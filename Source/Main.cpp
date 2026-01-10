@@ -18,7 +18,7 @@ public:
 
     const juce::String getApplicationName() override
     {
-        return "Pitch Editor";
+        return "HachiTune";
     }
 
     const juce::String getApplicationVersion() override

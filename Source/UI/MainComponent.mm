@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "../Utils/Constants.h"
 #include "../Utils/MelSpectrogram.h"
+#include "../Utils/F0Smoother.h"
 #include "../Utils/PlatformPaths.h"
 #include "../Utils/Localization.h"
 
@@ -716,38 +717,49 @@ void MainComponent::analyzeAudio(Project& targetProject, const std::function<voi
         DBG("FCPE raw frames: " << fcpeF0.size() << ", target frames: " << targetFrames);
         
         // Resample FCPE F0 (100 fps @ 16kHz) to vocoder frame rate (86.1 fps @ 44.1kHz)
-        // FCPE: sr=16000, hop=160 -> 100 fps
-        // Vocoder: sr=44100, hop=512 -> 86.13 fps
+        // FCPE: sr=16000, hop=160 -> 100 fps, frame time = hop/16000 = 0.01s
+        // Vocoder: sr=44100, hop=512 -> 86.13 fps, frame time = hop/44100 = 0.01161s
+        // Use time-based alignment for better accuracy
         if (!fcpeF0.empty() && targetFrames > 0)
         {
             audioData.f0.resize(targetFrames);
-            double ratio = static_cast<double>(fcpeF0.size()) / targetFrames;
+            
+            // Time per frame for each system
+            const double fcpeFrameTime = 160.0 / 16000.0;  // 0.01 seconds
+            const double vocoderFrameTime = 512.0 / 44100.0;  // ~0.01161 seconds
             
             for (int i = 0; i < targetFrames; ++i)
             {
-                double srcPos = i * ratio;
-                int srcIdx = static_cast<int>(srcPos);
-                double frac = srcPos - srcIdx;
+                // Calculate time position for vocoder frame
+                double vocoderTime = i * vocoderFrameTime;
+                
+                // Find corresponding FCPE frame indices
+                double fcpeFramePos = vocoderTime / fcpeFrameTime;
+                int srcIdx = static_cast<int>(fcpeFramePos);
+                double frac = fcpeFramePos - srcIdx;
                 
                 if (srcIdx + 1 < static_cast<int>(fcpeF0.size()))
                 {
-                    // Linear interpolation, but only between voiced frames
+                    // Linear interpolation with voiced/unvoiced awareness
                     float f0_a = fcpeF0[srcIdx];
                     float f0_b = fcpeF0[srcIdx + 1];
                     
-                    if (f0_a > 0 && f0_b > 0)
+                    if (f0_a > 0.0f && f0_b > 0.0f)
                     {
-                        // Both voiced: interpolate
-                        audioData.f0[i] = static_cast<float>(f0_a * (1.0 - frac) + f0_b * frac);
+                        // Both voiced: linear interpolation in log domain for better musical accuracy
+                        float logF0_a = std::log(f0_a);
+                        float logF0_b = std::log(f0_b);
+                        float logF0_interp = logF0_a * (1.0 - frac) + logF0_b * frac;
+                        audioData.f0[i] = std::exp(logF0_interp);
                     }
-                    else if (f0_a > 0)
+                    else if (f0_a > 0.0f)
                     {
-                        // Only first voiced
+                        // Only first voiced: use it
                         audioData.f0[i] = f0_a;
                     }
-                    else if (f0_b > 0)
+                    else if (f0_b > 0.0f)
                     {
-                        // Only second voiced
+                        // Only second voiced: use it
                         audioData.f0[i] = f0_b;
                     }
                     else
@@ -759,6 +771,11 @@ void MainComponent::analyzeAudio(Project& targetProject, const std::function<voi
                 else if (srcIdx < static_cast<int>(fcpeF0.size()))
                 {
                     audioData.f0[i] = fcpeF0[srcIdx];
+                }
+                else if (srcIdx >= static_cast<int>(fcpeF0.size()))
+                {
+                    // Beyond source range: use last value if voiced
+                    audioData.f0[i] = fcpeF0.back() > 0.0f ? fcpeF0.back() : 0.0f;
                 }
                 else
                 {
@@ -778,7 +795,14 @@ void MainComponent::analyzeAudio(Project& targetProject, const std::function<voi
             audioData.voicedMask[i] = audioData.f0[i] > 0;
         }
         
-        DBG("Resampled F0 frames: " << audioData.f0.size());
+        // Apply F0 smoothing for better quality
+        onProgress(0.65, "Smoothing pitch curve...");
+        audioData.f0 = F0Smoother::smoothF0(audioData.f0, audioData.voicedMask);
+        
+        // Initialize baseline F0 for further edits (immutable reference)
+        audioData.baseF0 = audioData.f0;
+        
+        DBG("Resampled and smoothed F0 frames: " << audioData.f0.size());
     }
     else
     {
@@ -786,6 +810,13 @@ void MainComponent::analyzeAudio(Project& targetProject, const std::function<voi
         auto [f0Values, voicedValues] = pitchDetector->extractF0(samples, numSamples);
         audioData.f0 = std::move(f0Values);
         audioData.voicedMask = std::move(voicedValues);
+        
+        // Apply F0 smoothing for better quality
+        onProgress(0.65, "Smoothing pitch curve...");
+        audioData.f0 = F0Smoother::smoothF0(audioData.f0, audioData.voicedMask);
+        
+        // Initialize baseline F0
+        audioData.baseF0 = audioData.f0;
     }
     
     onProgress(0.75, "Loading vocoder...");

@@ -1,10 +1,10 @@
 <div align="center">
-  <h1> Pitch Editor </h1>
+  <h1> HachiTune </h1>
 
   <img src="logo.png" alt="Logo" width="300" />
 
   <p>
-    A lightweight pitch editor built with JUCE framework, featuring FCPE pitch detection and neural vocoder synthesis.
+    A lightweight HachiTune built with JUCE framework, featuring FCPE pitch detection and neural vocoder synthesis.
   </p>
 
   <p>
@@ -77,9 +77,9 @@ cmake --build build --config Release
 ### Output
 
 Build artifacts are in `build/PitchEditorPlugin_artefacts/Release/`:
-- `Pitch Editor.app` - Standalone application (macOS)
-- `Pitch Editor.vst3` - VST3 plugin
-- `Pitch Editor.component` - AU plugin (macOS)
+- `HachiTune.app` - Standalone application (macOS)
+- `HachiTune.vst3` - VST3 plugin
+- `HachiTune.component` - AU plugin (macOS)
 
 ## Usage
 

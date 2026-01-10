@@ -253,7 +253,9 @@ std::vector<float> Vocoder::infer(const std::vector<std::vector<float>>& mel,
             }
         }
         
-        // Log mel statistics
+        // Validate and normalize mel spectrogram values
+        // PC-NSF-HiFiGAN typically expects mel values in log domain, already done
+        // But ensure values are in reasonable range (typically -10 to 5 for log mel)
         float melMin = 99999.0f, melMax = -99999.0f;
         for (float v : melData)
         {
@@ -262,17 +264,33 @@ std::vector<float> Vocoder::infer(const std::vector<std::vector<float>>& mel,
         }
         log("Mel stats: min=" + std::to_string(melMin) + " max=" + std::to_string(melMax));
         
+        // Clamp mel values to reasonable range to avoid extreme values
+        // This prevents potential numerical issues in the model
+        const float melMinClamp = -15.0f;  // Typical minimum for log mel
+        const float melMaxClamp = 5.0f;   // Typical maximum for log mel
+        for (float& v : melData)
+        {
+            v = std::clamp(v, melMinClamp, melMaxClamp);
+        }
+        
         // Prepare f0 input: [batch=1, frames]
         std::vector<int64_t> f0Shape = {1, static_cast<int64_t>(numFrames)};
         std::vector<float> f0Data(f0.begin(), f0.begin() + numFrames);
         
-        // Log F0 statistics
+        // Validate and clamp F0 values to reasonable range
+        // Typical human voice range: 50 Hz to 1000 Hz
+        const float f0MinValid = 20.0f;   // Minimum valid F0
+        const float f0MaxValid = 2000.0f; // Maximum valid F0
+        
         float f0Min = 99999.0f, f0Max = 0.0f, f0Sum = 0.0f;
         int voicedCount = 0;
-        for (float freq : f0Data)
+        for (float& freq : f0Data)
         {
             if (freq > 0.0f)
             {
+                // Clamp to valid range
+                freq = std::clamp(freq, f0MinValid, f0MaxValid);
+                
                 f0Min = std::min(f0Min, freq);
                 f0Max = std::max(f0Max, freq);
                 f0Sum += freq;

@@ -69,6 +69,10 @@ public:
     void markDirty() { dirty = true; }
     void clearDirty() { dirty = false; }
 
+    // Rest note (no pitch, just a placeholder for silence)
+    bool isRest() const { return rest; }
+    void setRest(bool r) { rest = r; }
+
     // Check if frame is within note
     bool containsFrame(int frame) const;
 
@@ -88,4 +92,5 @@ private:
     std::vector<float> f0Values;
     bool selected = false;
     bool dirty = false;  // For incremental synthesis
+    bool rest = false;   // Rest note (silence placeholder)
 };

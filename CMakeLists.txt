@@ -206,7 +206,11 @@ set(PITCH_EDITOR_COMMON_SOURCES
     Source/Utils/MelSpectrogram.cpp
     Source/Utils/MelSpectrogram.h
     Source/Utils/BasePitchCurve.cpp
-    Source/Utils/BasePitchCurve.h)
+    Source/Utils/BasePitchCurve.h
+    Source/Utils/F0Smoother.cpp
+    Source/Utils/F0Smoother.h
+    Source/Utils/SinusoidalSmoothing.cpp
+    Source/Utils/SinusoidalSmoothing.h)
 
 target_sources(PitchEditor PRIVATE
     ${MAIN_SOURCE}

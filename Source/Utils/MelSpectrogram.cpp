@@ -103,7 +103,14 @@ void MelSpectrogram::createMelFilterbank()
 
 std::vector<std::vector<float>> MelSpectrogram::compute(const float* audio, int numSamples)
 {
-    int numFrames = (numSamples - nFft) / hopSize + 1;
+    // Add center padding for better frame alignment (matches librosa default)
+    // This ensures the first frame is centered at hopSize/2
+    int padLeft = nFft / 2;
+    int padRight = nFft / 2;
+    
+    // Calculate number of frames with proper padding
+    int paddedLength = numSamples + padLeft + padRight;
+    int numFrames = (paddedLength - nFft) / hopSize + 1;
     if (numFrames < 1)
     {
         numFrames = 1;
@@ -116,25 +123,44 @@ std::vector<std::vector<float>> MelSpectrogram::compute(const float* audio, int 
     
     for (int i = 0; i < numFrames; ++i)
     {
-        int startSample = i * hopSize;
+        // Calculate sample position in original audio (accounting for padding)
+        int centerSample = i * hopSize;
+        int startSample = centerSample - padLeft;
         
-        // Copy and window
+        // Copy and window with proper boundary handling
         std::fill(frame.begin(), frame.end(), 0.0f);
-        for (int j = 0; j < nFft && startSample + j < numSamples; ++j)
+        for (int j = 0; j < nFft; ++j)
         {
-            frame[j] = audio[startSample + j] * window[j];
+            int srcIdx = startSample + j;
+            
+            if (srcIdx < 0)
+            {
+                // Left padding: reflect
+                frame[j] = audio[std::min(-srcIdx - 1, numSamples - 1)] * window[j];
+            }
+            else if (srcIdx >= numSamples)
+            {
+                // Right padding: reflect
+                int reflectIdx = numSamples - 1 - (srcIdx - numSamples);
+                frame[j] = audio[std::max(0, reflectIdx)] * window[j];
+            }
+            else
+            {
+                // Normal case
+                frame[j] = audio[srcIdx] * window[j];
+            }
         }
         
         // Perform FFT
         fft.performRealOnlyForwardTransform(frame.data());
         
-        // Compute magnitude spectrum
+        // Compute magnitude spectrum with small epsilon to avoid log(0)
         std::vector<float> mag(numBins);
         for (int k = 0; k < numBins; ++k)
         {
             float real = frame[k * 2];
             float imag = frame[k * 2 + 1];
-            mag[k] = std::sqrt(real * real + imag * imag);
+            mag[k] = std::sqrt(real * real + imag * imag + 1e-9f);
         }
         
         // Apply mel filterbank
@@ -148,7 +174,8 @@ std::vector<std::vector<float>> MelSpectrogram::compute(const float* audio, int 
             }
             
             // Log scale (natural log for vocoder compatibility)
-            mel[i][m] = std::log(std::max(sum, 1e-5f));
+            // Use slightly larger epsilon to match common vocoder implementations
+            mel[i][m] = std::log(std::max(sum, 1e-10f));
         }
     }
     
