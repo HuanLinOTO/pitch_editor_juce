@@ -97,9 +97,10 @@ class NotePitchDragAction : public UndoableAction
 public:
     NotePitchDragAction(Note* note, std::vector<float>* f0Array,
                         float oldMidi, float newMidi,
-                        std::vector<F0FrameEdit> f0Edits)
+                        std::vector<F0FrameEdit> f0Edits,
+                        std::function<void(Note*)> onNoteChanged = nullptr)
         : note(note), f0Array(f0Array), oldMidi(oldMidi), newMidi(newMidi),
-          f0Edits(std::move(f0Edits)) {}
+          f0Edits(std::move(f0Edits)), onNoteChanged(onNoteChanged) {}
 
     void undo() override
     {
@@ -112,6 +113,10 @@ public:
                 if (e.idx >= 0 && e.idx < static_cast<int>(f0Array->size()))
                     (*f0Array)[e.idx] = e.oldF0;
             }
+        }
+        // Notify that note changed, so base pitch can be recalculated
+        if (onNoteChanged && note) {
+            onNoteChanged(note);
         }
     }
 
@@ -127,6 +132,10 @@ public:
                     (*f0Array)[e.idx] = e.newF0;
             }
         }
+        // Notify that note changed, so base pitch can be recalculated
+        if (onNoteChanged && note) {
+            onNoteChanged(note);
+        }
     }
 
     juce::String getName() const override { return "Drag Note Pitch"; }
@@ -137,6 +146,7 @@ private:
     float oldMidi;
     float newMidi;
     std::vector<F0FrameEdit> f0Edits;
+    std::function<void(Note*)> onNoteChanged;  // Callback when note MIDI changes
 };
 
 /**

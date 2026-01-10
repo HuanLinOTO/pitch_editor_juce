@@ -94,6 +94,8 @@ private:
     
     Note* findNoteAt(float x, float y);
     void updateScrollBars();
+    void updateBasePitchCacheIfNeeded();
+    void reapplyBasePitchForNote(Note* note);  // Recalculate F0 from base pitch + delta after undo/redo
     
     // Pitch drawing helpers
     void applyPitchDrawing(float x, float y);
@@ -144,6 +146,17 @@ private:
     float cachedPixelsPerSecond = -1.0f;
     int cachedWidth = 0;
     int cachedHeight = 0;
+
+    // Base pitch curve cache for performance
+    // Only recalculates when notes change, not on every repaint
+    std::vector<float> cachedBasePitch;
+    size_t cachedNoteCount = 0;
+    int cachedTotalFrames = 0;
+    bool cacheInvalidated = true;  // Start invalidated, force first calculation
+    void invalidateBasePitchCache() { cacheInvalidated = true; cachedNoteCount = 0; cachedBasePitch.clear(); }
+    
+    // Optional: disable base pitch rendering for performance testing
+    static constexpr bool ENABLE_BASE_PITCH_DEBUG = true;  // Set to false to disable
 
     // Mouse drag throttling
     juce::int64 lastDragRepaintTime = 0;

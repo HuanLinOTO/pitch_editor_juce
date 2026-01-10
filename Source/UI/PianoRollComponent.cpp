@@ -1,4 +1,6 @@
 #include "PianoRollComponent.h"
+#include "../Utils/BasePitchCurve.h"
+#include "../Utils/Constants.h"
 #include <cmath>
 #include <limits>
 
@@ -482,6 +484,54 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g) {
   if (pathStarted) {
     g.strokePath(path, juce::PathStrokeType(2.0f));
   }
+
+  // Draw base pitch curve as dashed line for development/debugging
+  // Use cached base pitch to avoid expensive recalculation on every repaint
+  if constexpr (ENABLE_BASE_PITCH_DEBUG) {
+    updateBasePitchCacheIfNeeded();
+    
+    if (!cachedBasePitch.empty()) {
+        // Draw base pitch curve with dashed line
+        g.setColour(juce::Colour(0xFF00FF00).withAlpha(0.6f));  // Green with transparency
+        juce::Path basePath;
+        bool basePathStarted = false;
+
+        for (int i = startFrame; i < endFrame; ++i) {
+          if (i >= 0 && i < static_cast<int>(cachedBasePitch.size())) {
+            float baseMidi = cachedBasePitch[static_cast<size_t>(i)];
+            if (baseMidi > 0.0f) {
+              float x = framesToSeconds(i) * pixelsPerSecond;
+              float y = midiToY(baseMidi) + pixelsPerSemitone * 0.5f;  // Center in row
+
+              if (!basePathStarted) {
+                basePath.startNewSubPath(x, y);
+                basePathStarted = true;
+              } else {
+                basePath.lineTo(x, y);
+              }
+            } else if (basePathStarted) {
+              // Break path at unvoiced regions - draw current segment before breaking
+              juce::Path dashedPath;
+              juce::PathStrokeType stroke(1.5f);
+              const float dashLengths[] = {4.0f, 4.0f};  // 4px dash, 4px gap
+              stroke.createDashedStroke(dashedPath, basePath, dashLengths, 2);
+              g.strokePath(dashedPath, juce::PathStrokeType(1.5f));
+              basePath.clear();
+              basePathStarted = false;
+            }
+          }
+        }
+
+        if (basePathStarted) {
+          // Use dashed stroke for base pitch curve
+          juce::Path dashedPath;
+          juce::PathStrokeType stroke(1.5f);
+          const float dashLengths[] = {4.0f, 4.0f};  // 4px dash, 4px gap
+          stroke.createDashedStroke(dashedPath, basePath, dashLengths, 2);
+          g.strokePath(dashedPath, juce::PathStrokeType(1.5f));
+        }
+    }
+  }
 }
 
 void PianoRollComponent::drawCursor(juce::Graphics &g) {
@@ -607,7 +657,8 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
       onNoteSelected(note);
 
     // Calculate delta pitch before starting drag
-    // Use baseF0 to preserve original pitch curve shape
+    // CRITICAL: Delta should be relative to FIXED note MIDI value, not smoothed base pitch
+    // This ensures when we apply: newF0 = newNoteMidi + delta, it aligns perfectly
     if (project)
     {
         auto& audioData = project->getAudioData();
@@ -616,17 +667,21 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
         int numFrames = endFrame - startFrame;
 
         std::vector<float> delta(numFrames, 0.0f);
-        float baseMidi = note->getMidiNote();
-
+        
         // Use baseF0 (original detected pitch) to preserve curve shape
         const auto& baseF0 = audioData.baseF0.empty() ? audioData.f0 : audioData.baseF0;
+        float fixedBaseMidi = note->getMidiNote();  // Use fixed note MIDI as reference
+        
         for (int i = 0; i < numFrames; ++i)
         {
             int globalFrame = startFrame + i;
             if (globalFrame < static_cast<int>(baseF0.size()) && baseF0[globalFrame] > 0.0f)
             {
                 float f0Midi = freqToMidi(baseF0[globalFrame]);
-                delta[i] = f0Midi - baseMidi;
+                
+                // Delta = actual F0 - fixed note MIDI value
+                // This ensures when note MIDI changes, we can directly apply: newF0 = newNoteMidi + delta
+                delta[i] = f0Midi - fixedBaseMidi;
             }
         }
         note->setDeltaPitch(std::move(delta));
@@ -734,24 +789,52 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
       // Apply visual offset even if tiny, so UI reflects final state consistently
       draggedNote->setPitchOffset(newOffset);
 
+      // IMPORTANT: Update note's midiNote FIRST, then invalidate cache, then update F0
+      // This ensures the cache uses the new midiNote value
+      draggedNote->setMidiNote(originalMidiNote + newOffset);
+      invalidateBasePitchCache();  // Invalidate cache so it will be regenerated with new note pitch
+      
+      // Find adjacent notes for boundary smoothing (needed for both delta and fallback paths)
+      Note* prevNote = nullptr;
+      Note* nextNote = nullptr;
+      auto& notes = project->getNotes();  // Non-const reference to allow taking address
+      for (auto& note : notes) {
+        if (note.isRest()) continue;
+        if (note.getEndFrame() <= startFrame && (!prevNote || note.getEndFrame() > prevNote->getEndFrame())) {
+          prevNote = &note;
+        }
+        if (note.getStartFrame() >= endFrame && (!nextNote || note.getStartFrame() < nextNote->getStartFrame())) {
+          nextNote = &note;
+        }
+      }
+      
       if (std::abs(newOffset) > 0.001f) {
-        // Update F0 values using delta pitch model
+        // Update F0 values using delta pitch model with smoothed base pitch
         if (draggedNote->hasDeltaPitch()) {
         const auto& delta = draggedNote->getDeltaPitch();
         float newBaseMidi = originalMidiNote + newOffset;
-        const auto& baseF0 = audioData.baseF0.empty() ? audioData.f0 : audioData.baseF0;
-
-          for (int i = startFrame; i < endFrame && i < f0Size; ++i) {
+        
+        // Update base pitch cache (will regenerate with new note pitch)
+        updateBasePitchCacheIfNeeded();
+        
+        // Apply base pitch + delta deviation
+        // CRITICAL: Delta is relative to fixed note MIDI, so directly apply: newF0 = newNoteMidi + delta
+        // This ensures F0 aligns perfectly with the note's MIDI value throughout the entire note range
+        for (int i = startFrame; i < endFrame && i < f0Size; ++i) {
             int localIdx = i - startFrame;
           float d = (localIdx < static_cast<int>(delta.size())) ? delta[localIdx] : 0.0f;
-          // Apply new base MIDI note + delta deviation
+          
+          // Directly apply: newF0 = newNoteMidi + delta
+          // Delta was calculated relative to original note MIDI, so this preserves the shape
+          // while aligning to the new note MIDI value
           float targetMidi = newBaseMidi + d;
           audioData.f0[i] = midiToFreq(targetMidi);
           }
 
-          // Set F0 dirty range for synthesis
-          // Note: Boundary smoothing is handled by the UV crossfade mechanism below (lines 840-960)
-          project->setF0DirtyRange(startFrame, endFrame);
+          // Set F0 dirty range for synthesis (extend to include smoothing region)
+          int smoothStart = std::max(0, startFrame - 60);  // ~0.7s before for smoothing
+          int smoothEnd = std::min(f0Size, endFrame + 60);  // ~0.7s after for smoothing
+          project->setF0DirtyRange(smoothStart, smoothEnd);
         } else {
           // Fallback: apply uniform shift when no delta map
           float ratio = std::pow(2.0f, newOffset / 12.0f);
@@ -782,12 +865,12 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
         auto action = std::make_unique<NotePitchDragAction>(
             draggedNote, &audioData.f0,
             originalMidiNote, originalMidiNote + newOffset,
-            std::move(f0Edits));
+            std::move(f0Edits),
+            [this](Note* n) { reapplyBasePitchForNote(n); });  // Callback to recalculate F0 after undo/redo
         undoManager->addAction(std::move(action));
       }
 
-      // Update base MIDI note
-      draggedNote->setMidiNote(originalMidiNote + newOffset);
+      // Note: midiNote was already updated above before cache invalidation
       // Reset offset since base note was updated
       draggedNote->setPitchOffset(0.0f);
 
@@ -816,26 +899,64 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
         return -1;  // No UV region found
       };
 
-      // Smooth boundary with crossfade, preferring UV regions
+      // Smooth boundary with crossfade, preferring UV regions or adjacent notes
+      // Capture prevNote and nextNote by reference (they're in the same scope)
       auto smoothBoundaryAtUV = [&](int noteBoundary, bool isStart) {
         const int maxSearchRange = 20;  // Search up to 20 frames for UV region
-        const int minCrossfadeFrames = 5;
-        const int maxCrossfadeFrames = 15;
+        const int maxCrossfadeFrames = 20;  // Increased for smoother transitions
+        
+        // Find adjacent note for smooth transition
+        Note* adjacentNote = isStart ? prevNote : nextNote;
+        float adjacentNoteMidi = 0.0f;
+        int adjacentNoteStart = -1, adjacentNoteEnd = -1;
+        if (adjacentNote) {
+          adjacentNoteMidi = adjacentNote->getMidiNote();
+          adjacentNoteStart = adjacentNote->getStartFrame();
+          adjacentNoteEnd = adjacentNote->getEndFrame();
+        }
         
         // Find nearest UV region
         int uvFrame = findNearestUVRegion(noteBoundary, maxSearchRange);
+        
+        // Determine target F0 for smooth transition
+        float targetF0 = 0.0f;
+        bool useAdjacentNote = false;
+        
+        if (adjacentNote && adjacentNoteStart >= 0 && adjacentNoteEnd > adjacentNoteStart) {
+          // Check if adjacent note has F0 values at boundary
+          int boundaryFrame = isStart ? (startFrame - 1) : endFrame;
+          if (boundaryFrame >= 0 && boundaryFrame < f0Size && audioData.f0[boundaryFrame] > 0.0f) {
+            targetF0 = audioData.f0[boundaryFrame];
+            useAdjacentNote = true;
+          } else {
+            // Use adjacent note's MIDI value
+            targetF0 = midiToFreq(adjacentNoteMidi);
+            useAdjacentNote = true;
+          }
+        }
         
         if (uvFrame >= 0) {
           // Found UV region: use it as splice point with crossfade
           int crossfadeStart, crossfadeEnd;
           if (isStart) {
-            // At note start: crossfade from UV region into note
-            crossfadeStart = std::max(0, uvFrame - maxCrossfadeFrames);
+            // At note start: crossfade from UV region or adjacent note into note
+            crossfadeStart = std::max(0, (uvFrame >= 0 ? uvFrame : noteBoundary) - maxCrossfadeFrames);
             crossfadeEnd = std::min(f0Size, noteBoundary + maxCrossfadeFrames);
           } else {
-            // At note end: crossfade from note into UV region
+            // At note end: crossfade from note into UV region or adjacent note
             crossfadeStart = std::max(0, noteBoundary - maxCrossfadeFrames);
-            crossfadeEnd = std::min(f0Size, uvFrame + maxCrossfadeFrames);
+            crossfadeEnd = std::min(f0Size, (uvFrame >= 0 ? uvFrame : noteBoundary) + maxCrossfadeFrames);
+          }
+          
+          // Limit crossfade to transition region only (not inside adjacent note)
+          if (adjacentNote && adjacentNoteStart >= 0 && adjacentNoteEnd > adjacentNoteStart) {
+            if (isStart) {
+              // At start: don't modify inside previous note
+              crossfadeStart = std::max(crossfadeStart, adjacentNoteEnd);
+            } else {
+              // At end: don't modify inside next note
+              crossfadeEnd = std::min(crossfadeEnd, adjacentNoteStart);
+            }
           }
           
           // Apply crossfade: blend original F0 (outside note) with new F0 (inside note)
@@ -843,8 +964,14 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
             bool isInsideNote = (i >= startFrame && i < endFrame);
             bool isInCrossfadeRegion = (i >= crossfadeStart && i < crossfadeEnd);
             
-            if (isInCrossfadeRegion) {
-              // Calculate crossfade weight (0 = original, 1 = new)
+            // Don't modify inside adjacent note
+            bool isInsideAdjacentNote = false;
+            if (adjacentNote && adjacentNoteStart >= 0 && adjacentNoteEnd > adjacentNoteStart) {
+              isInsideAdjacentNote = (i >= adjacentNoteStart && i < adjacentNoteEnd);
+            }
+            
+            if (isInCrossfadeRegion && !isInsideAdjacentNote) {
+              // Calculate crossfade weight (0 = original/adjacent, 1 = new)
               float t;
               if (isStart) {
                 t = static_cast<float>(i - crossfadeStart) / (crossfadeEnd - crossfadeStart);
@@ -856,22 +983,90 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
               // Use smooth curve (ease-in-out)
               t = t * t * (3.0f - 2.0f * t);
               
-              // Get original F0 value (before edit)
+              // Get original/target F0 value (before edit or from adjacent note)
               float originalF0 = 0.0f;
-              int localIdx = i - startFrame;
-              if (localIdx >= 0 && localIdx < static_cast<int>(originalF0Values.size())) {
-                originalF0 = originalF0Values[localIdx];
-              } else if (i < startFrame || i >= endFrame) {
-                originalF0 = audioData.f0[i];  // Outside note, use current value
+              if (isInsideNote) {
+                int localIdx = i - startFrame;
+                if (localIdx >= 0 && localIdx < static_cast<int>(originalF0Values.size())) {
+                  originalF0 = originalF0Values[localIdx];
+                }
+              } else {
+                // Outside note: use current F0 or adjacent note's F0
+                if (useAdjacentNote && targetF0 > 0.0f) {
+                  originalF0 = targetF0;
+                } else if (i >= 0 && i < f0Size) {
+                  originalF0 = audioData.f0[i];
+                }
               }
               
-              // Blend original and new F0
-              float newF0 = audioData.f0[i];
-              if (originalF0 > 0.0f && newF0 > 0.0f) {
-                audioData.f0[i] = originalF0 * (1.0f - t) + newF0 * t;
-              } else if (newF0 > 0.0f) {
-                audioData.f0[i] = newF0 * t;  // Fade in new F0
+              // Blend original/target and new F0
+              float newF0 = isInsideNote ? audioData.f0[i] : originalF0;
+              if (isInsideNote) {
+                // Inside note: blend from original to new
+                if (originalF0 > 0.0f && newF0 > 0.0f) {
+                  audioData.f0[i] = originalF0 * (1.0f - t) + newF0 * t;
+                } else if (newF0 > 0.0f) {
+                  audioData.f0[i] = newF0 * t;  // Fade in new F0
+                }
+              } else {
+                // Outside note: blend from adjacent/target to current
+                if (originalF0 > 0.0f && newF0 > 0.0f) {
+                  audioData.f0[i] = originalF0 * (1.0f - t) + newF0 * t;
+                }
               }
+            }
+          }
+        } else if (useAdjacentNote && targetF0 > 0.0f) {
+          // No UV region but have adjacent note: smooth transition to adjacent note
+          // IMPORTANT: Only modify transition region, not inside adjacent note
+          int crossfadeFrames = maxCrossfadeFrames;
+          int crossfadeStart, crossfadeEnd;
+          if (isStart) {
+            crossfadeStart = std::max(0, noteBoundary - crossfadeFrames);
+            crossfadeEnd = std::min(f0Size, noteBoundary + crossfadeFrames);
+          } else {
+            crossfadeStart = std::max(0, noteBoundary - crossfadeFrames);
+            crossfadeEnd = std::min(f0Size, noteBoundary + crossfadeFrames);
+          }
+          
+          // Limit crossfade to transition region only (not inside adjacent note)
+          if (adjacentNote && adjacentNoteStart >= 0 && adjacentNoteEnd > adjacentNoteStart) {
+            if (isStart) {
+              // At start: don't modify inside previous note
+              crossfadeStart = std::max(crossfadeStart, adjacentNoteEnd);
+            } else {
+              // At end: don't modify inside next note
+              crossfadeEnd = std::min(crossfadeEnd, adjacentNoteStart);
+            }
+          }
+          
+          for (int i = crossfadeStart; i < crossfadeEnd && i < f0Size; ++i) {
+            bool isInsideNote = (i >= startFrame && i < endFrame);
+            if (isInsideNote) continue;  // Don't modify inside current note
+            
+            // Don't modify inside adjacent note either
+            if (adjacentNote && adjacentNoteStart >= 0 && adjacentNoteEnd > adjacentNoteStart) {
+              if (i >= adjacentNoteStart && i < adjacentNoteEnd) {
+                continue;  // Skip adjacent note's internal frames
+              }
+            }
+            
+            // Calculate blend weight
+            float t;
+            if (isStart) {
+              t = static_cast<float>(i - crossfadeStart) / (crossfadeEnd - crossfadeStart);
+            } else {
+              t = static_cast<float>(crossfadeEnd - i) / (crossfadeEnd - crossfadeStart);
+            }
+            t = std::clamp(t, 0.0f, 1.0f);
+            t = t * t * (3.0f - 2.0f * t);  // Smooth curve
+            
+            // Blend from adjacent note's F0 to current F0 (only in transition region)
+            float currentF0 = audioData.f0[i];
+            if (targetF0 > 0.0f && currentF0 > 0.0f) {
+              audioData.f0[i] = targetF0 * (1.0f - t) + currentF0 * t;
+            } else if (targetF0 > 0.0f) {
+              audioData.f0[i] = targetF0;
             }
           }
         } else {
@@ -924,6 +1119,99 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
       // Apply improved boundary smoothing
       smoothBoundaryAtUV(startFrame, true);   // Start boundary
       smoothBoundaryAtUV(endFrame, false);    // End boundary
+      
+      // Smooth interpolation in gaps between notes to avoid sharp corners
+      // Check gap between current note and next note
+      if (nextNote && nextNote->getStartFrame() > endFrame) {
+        int gapStart = endFrame;
+        int gapEnd = nextNote->getStartFrame();
+        int gapSize = gapEnd - gapStart;
+        
+        if (gapSize > 0 && gapSize < 100) {  // Only smooth small gaps (up to 100 frames)
+          // Get F0 values at gap boundaries
+          float f0AtGapStart = 0.0f;
+          float f0AtGapEnd = 0.0f;
+          
+          if (gapStart > 0 && gapStart - 1 < f0Size && audioData.f0[gapStart - 1] > 0.0f) {
+            f0AtGapStart = audioData.f0[gapStart - 1];
+          } else if (gapStart < f0Size && audioData.f0[gapStart] > 0.0f) {
+            f0AtGapStart = audioData.f0[gapStart];
+          }
+          
+          if (gapEnd < f0Size && audioData.f0[gapEnd] > 0.0f) {
+            f0AtGapEnd = audioData.f0[gapEnd];
+          } else if (gapEnd > 0 && gapEnd - 1 < f0Size && audioData.f0[gapEnd - 1] > 0.0f) {
+            f0AtGapEnd = audioData.f0[gapEnd - 1];
+          }
+          
+          // If both boundaries have F0 values, interpolate smoothly
+          if (f0AtGapStart > 0.0f && f0AtGapEnd > 0.0f) {
+            for (int i = gapStart; i < gapEnd && i < f0Size; ++i) {
+              float t = static_cast<float>(i - gapStart) / gapSize;
+              t = std::clamp(t, 0.0f, 1.0f);
+              // Use smooth curve (ease-in-out) for natural interpolation
+              t = t * t * (3.0f - 2.0f * t);
+              
+              // Linear interpolation in frequency domain (more natural for pitch)
+              float interpolatedF0 = f0AtGapStart * (1.0f - t) + f0AtGapEnd * t;
+              
+              // Only set if current value is 0 or significantly different
+              if (audioData.f0[i] <= 0.0f || std::abs(audioData.f0[i] - interpolatedF0) > 1.0f) {
+                audioData.f0[i] = interpolatedF0;
+                if (i < static_cast<int>(audioData.voicedMask.size())) {
+                  audioData.voicedMask[i] = true;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Check gap between previous note and current note
+      if (prevNote && prevNote->getEndFrame() < startFrame) {
+        int gapStart = prevNote->getEndFrame();
+        int gapEnd = startFrame;
+        int gapSize = gapEnd - gapStart;
+        
+        if (gapSize > 0 && gapSize < 100) {  // Only smooth small gaps (up to 100 frames)
+          // Get F0 values at gap boundaries
+          float f0AtGapStart = 0.0f;
+          float f0AtGapEnd = 0.0f;
+          
+          if (gapStart < f0Size && audioData.f0[gapStart] > 0.0f) {
+            f0AtGapStart = audioData.f0[gapStart];
+          } else if (gapStart > 0 && gapStart - 1 < f0Size && audioData.f0[gapStart - 1] > 0.0f) {
+            f0AtGapStart = audioData.f0[gapStart - 1];
+          }
+          
+          if (gapEnd < f0Size && audioData.f0[gapEnd] > 0.0f) {
+            f0AtGapEnd = audioData.f0[gapEnd];
+          } else if (gapEnd > 0 && gapEnd - 1 < f0Size && audioData.f0[gapEnd - 1] > 0.0f) {
+            f0AtGapEnd = audioData.f0[gapEnd - 1];
+          }
+          
+          // If both boundaries have F0 values, interpolate smoothly
+          if (f0AtGapStart > 0.0f && f0AtGapEnd > 0.0f) {
+            for (int i = gapStart; i < gapEnd && i < f0Size; ++i) {
+              float t = static_cast<float>(i - gapStart) / gapSize;
+              t = std::clamp(t, 0.0f, 1.0f);
+              // Use smooth curve (ease-in-out) for natural interpolation
+              t = t * t * (3.0f - 2.0f * t);
+              
+              // Linear interpolation in frequency domain (more natural for pitch)
+              float interpolatedF0 = f0AtGapStart * (1.0f - t) + f0AtGapEnd * t;
+              
+              // Only set if current value is 0 or significantly different
+              if (audioData.f0[i] <= 0.0f || std::abs(audioData.f0[i] - interpolatedF0) > 1.0f) {
+                audioData.f0[i] = interpolatedF0;
+                if (i < static_cast<int>(audioData.voicedMask.size())) {
+                  audioData.voicedMask[i] = true;
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     // Trigger UI update + incremental synthesis when pitch edit is finished
@@ -1117,6 +1405,7 @@ void PianoRollComponent::scrollBarMoved(juce::ScrollBar *scrollBar,
 
 void PianoRollComponent::setProject(Project *proj) {
   project = proj;
+  invalidateBasePitchCache();  // Clear cache when project changes
   updateScrollBars();
   repaint();
 }
@@ -1279,6 +1568,106 @@ void PianoRollComponent::updateScrollBars() {
     verticalScrollBar.setRangeLimits(0, totalHeight);
     verticalScrollBar.setCurrentRange(scrollY, visibleHeight);
   }
+}
+
+void PianoRollComponent::updateBasePitchCacheIfNeeded() {
+  if (!project) {
+    cachedBasePitch.clear();
+    cachedNoteCount = 0;
+    cachedTotalFrames = 0;
+    return;
+  }
+
+  const auto& notes = project->getNotes();
+  const auto& audioData = project->getAudioData();
+  int totalFrames = static_cast<int>(audioData.f0.size());
+
+  // Check if cache is valid
+  size_t currentNoteCount = 0;
+  for (const auto& note : notes) {
+    if (!note.isRest()) {
+      currentNoteCount++;
+    }
+  }
+
+  // Invalidate cache if notes changed or total frames changed or explicitly invalidated
+  // For performance, we only check note count and total frames
+  // A more precise check would compare note positions/pitches, but that's expensive
+  if (cacheInvalidated || cachedNoteCount != currentNoteCount || cachedTotalFrames != totalFrames || cachedBasePitch.empty()) {
+    // Only regenerate if we have notes and frames
+    if (currentNoteCount > 0 && totalFrames > 0) {
+      // Collect all notes
+      std::vector<BasePitchCurve::NoteSegment> noteSegments;
+      noteSegments.reserve(currentNoteCount);
+      for (const auto& note : notes) {
+        if (!note.isRest()) {
+          noteSegments.push_back({
+            note.getStartFrame(),
+            note.getEndFrame(),
+            note.getMidiNote()
+          });
+        }
+      }
+
+      if (!noteSegments.empty()) {
+        // Generate smoothed base pitch curve (expensive operation, cached)
+        // This is only called when notes change, not on every repaint
+        cachedBasePitch = BasePitchCurve::generateForNotes(noteSegments, totalFrames);
+        cachedNoteCount = currentNoteCount;
+        cachedTotalFrames = totalFrames;
+        cacheInvalidated = false;  // Mark cache as valid
+      } else {
+        cachedBasePitch.clear();
+        cachedNoteCount = 0;
+        cachedTotalFrames = 0;
+        cacheInvalidated = false;  // Mark as processed (even if empty)
+      }
+    } else {
+      cachedBasePitch.clear();
+      cachedNoteCount = 0;
+      cachedTotalFrames = 0;
+      cacheInvalidated = false;  // Mark as processed (even if empty)
+    }
+  }
+}
+
+void PianoRollComponent::reapplyBasePitchForNote(Note* note) {
+  if (!note || !project) return;
+  
+  auto& audioData = project->getAudioData();
+  int startFrame = note->getStartFrame();
+  int endFrame = note->getEndFrame();
+  int f0Size = static_cast<int>(audioData.f0.size());
+  
+  // Invalidate base pitch cache since note MIDI changed
+  invalidateBasePitchCache();
+  updateBasePitchCacheIfNeeded();
+  
+  // Reapply base pitch + delta to F0
+  // CRITICAL: Delta is relative to fixed note MIDI, so directly apply: newF0 = noteMidi + delta
+  if (note->hasDeltaPitch()) {
+    const auto& delta = note->getDeltaPitch();
+    float noteMidi = note->getMidiNote();
+    
+    for (int i = startFrame; i < endFrame && i < f0Size; ++i) {
+      int localIdx = i - startFrame;
+      float d = (localIdx < static_cast<int>(delta.size())) ? delta[localIdx] : 0.0f;
+      
+      // Directly apply: newF0 = noteMidi + delta
+      // Delta was calculated relative to note MIDI, so this preserves the shape
+      // while aligning to the note MIDI value
+      float targetMidi = noteMidi + d;
+      audioData.f0[i] = midiToFreq(targetMidi);
+    }
+    
+    // Set F0 dirty range for synthesis
+    int smoothStart = std::max(0, startFrame - 60);
+    int smoothEnd = std::min(f0Size, endFrame + 60);
+    project->setF0DirtyRange(smoothStart, smoothEnd);
+  }
+  
+  // Trigger repaint
+  repaint();
 }
 
 void PianoRollComponent::applyPitchDrawing(float x, float y) {
