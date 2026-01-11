@@ -138,6 +138,10 @@ private:
     std::atomic<bool> hasPendingCursorUpdate { false };
     juce::int64 lastCursorUpdateTime = 0;
 
+#if JUCE_MAC
+    juce::ComponentDragger dragger;
+#endif
+
     // Incremental synthesis cancellation / coalescing
     std::shared_ptr<std::atomic<bool>> incrementalCancelFlag;
     std::atomic<uint64_t> incrementalJobId { 0 };

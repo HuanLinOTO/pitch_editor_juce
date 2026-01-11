@@ -232,14 +232,14 @@ void SettingsComponent::comboBoxChanged(juce::ComboBox* comboBox)
         currentDevice = deviceComboBox.getText();
 
         // Show/hide GPU device selector based on device type
-        bool isGPU = (currentDevice != "CPU");
-        if (isGPU)
+        bool showGpuDeviceList = (currentDevice == "CUDA" || currentDevice == "DirectML");
+        if (showGpuDeviceList)
         {
             // Update GPU device list for the selected device type
             updateGPUDeviceList(currentDevice);
         }
-        gpuDeviceLabel.setVisible(isGPU);
-        gpuDeviceComboBox.setVisible(isGPU);
+        gpuDeviceLabel.setVisible(showGpuDeviceList);
+        gpuDeviceComboBox.setVisible(showGpuDeviceList);
         resized();
 
         saveSettings();
@@ -652,15 +652,15 @@ void SettingsComponent::loadSettings()
     }
 
     // Update GPU device ID and visibility
-    bool isGPU = (currentDevice != "CPU");
-    if (isGPU)
+    bool showGpuDeviceList = (currentDevice == "CUDA" || currentDevice == "DirectML");
+    if (showGpuDeviceList)
     {
         // Update GPU device list for the loaded device type
         updateGPUDeviceList(currentDevice);
     }
     gpuDeviceComboBox.setSelectedId(gpuDeviceId + 1, juce::dontSendNotification);
-    gpuDeviceLabel.setVisible(isGPU);
-    gpuDeviceComboBox.setVisible(isGPU);
+    gpuDeviceLabel.setVisible(showGpuDeviceList);
+    gpuDeviceComboBox.setVisible(showGpuDeviceList);
 }
 
 void SettingsComponent::saveSettings()
@@ -670,12 +670,12 @@ void SettingsComponent::saveSettings()
         return;
 
     auto settingsDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                           .getChildFile("PitchEditor");
+                           .getChildFile("HachiTune");
     settingsDir.createDirectory();
 
     auto settingsFile = settingsDir.getChildFile("settings.xml");
 
-    juce::XmlElement xml("PitchEditorSettings");
+    juce::XmlElement xml("HachiTuneSettings");
     xml.setAttribute("device", currentDevice);
     xml.setAttribute("gpuDeviceId", gpuDeviceId);
 

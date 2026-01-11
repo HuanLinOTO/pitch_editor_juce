@@ -40,6 +40,8 @@ MainComponent::MainComponent(bool enableAudioDevice)
         if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::DirectML))
 #elif defined(USE_CUDA)
         if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::CUDA))
+#elif defined(__APPLE__)
+        if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::CoreML))
 #else
         if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::CPU))
 #endif
@@ -311,6 +313,31 @@ void MainComponent::mouseDoubleClick(const juce::MouseEvent& e)
 #else
     juce::ignoreUnused(e);
 #endif
+}
+
+bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& file : files)
+    {
+        if (file.endsWithIgnoreCase(".wav") || file.endsWithIgnoreCase(".mp3") ||
+            file.endsWithIgnoreCase(".flac") || file.endsWithIgnoreCase(".aiff") ||
+            file.endsWithIgnoreCase(".ogg") || file.endsWithIgnoreCase(".hachi"))
+            return true;
+    }
+    return false;
+}
+
+void MainComponent::filesDropped(const juce::StringArray& files, int /*x*/, int /*y*/)
+{
+    for (const auto& file : files)
+    {
+        juce::File f(file);
+        if (f.existsAsFile())
+        {
+            loadAudioFile(f);
+            break;
+        }
+    }
 }
 
 void MainComponent::timerCallback()
@@ -957,7 +984,7 @@ void MainComponent::resynthesizeIncremental()
         return;
     }
 
-    DBG("Has dirty notes: " << project->hasDirtyNotes() << " Has F0 dirty: " << project->hasF0DirtyRange());
+    DBG("Has dirty notes: " << (int)project->hasDirtyNotes() << " Has F0 dirty: " << (int)project->hasF0DirtyRange());
     
     auto [dirtyStart, dirtyEnd] = project->getDirtyFrameRange();
     if (dirtyStart < 0 || dirtyEnd < 0)
@@ -1405,7 +1432,7 @@ void MainComponent::applySettings()
 {
     // Load settings from file
     auto settingsFile = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                            .getChildFile("PitchEditor")
+                            .getChildFile("HachiTune")
                             .getChildFile("settings.xml");
     
     juce::String device = "CPU";

@@ -35,6 +35,8 @@ MainComponent::MainComponent(bool enableAudioDevice)
         if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::DirectML))
 #elif defined(USE_CUDA)
         if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::CUDA))
+#elif defined(__APPLE__)
+        if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::CoreML))
 #else
         if (fcpePitchDetector->loadModel(fcpeModelPath, melFilterbankPath, centTablePath, GPUProvider::CPU))
 #endif

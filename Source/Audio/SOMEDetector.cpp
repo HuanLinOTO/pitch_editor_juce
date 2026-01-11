@@ -36,6 +36,13 @@ bool SOMEDetector::loadModel(const juce::File& modelPath)
         } catch (const Ort::Exception& e) {
             DBG("SOME: Failed to add CUDA provider, using CPU");
         }
+#elif defined(__APPLE__)
+        try {
+            sessionOptions.AppendExecutionProvider("CoreML");
+            DBG("SOME: CoreML execution provider added");
+        } catch (const Ort::Exception& e) {
+            DBG("SOME: Failed to add CoreML provider, using CPU");
+        }
 #endif
 
 #ifdef _WIN32

@@ -173,7 +173,18 @@ bool FCPEPitchDetector::loadModel(const juce::File& modelPath,
                 DBG("FCPE: Failed to add CUDA provider, using CPU: " << e.what());
             }
         }
+        else
 #endif
+        if (provider == GPUProvider::CoreML)
+        {
+            try {
+                sessionOptions.AppendExecutionProvider("CoreML");
+                DBG("FCPE: CoreML execution provider added");
+            } catch (const Ort::Exception& e) {
+                DBG("FCPE: Failed to add CoreML provider, using CPU: " << e.what());
+            }
+        }
+        else
         {
             // CPU fallback - do nothing, CPU is default
             if (provider != GPUProvider::CPU)

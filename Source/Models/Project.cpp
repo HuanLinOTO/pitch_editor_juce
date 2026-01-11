@@ -22,7 +22,7 @@ bool Project::saveToFile(const juce::File& file) const
 
 std::unique_ptr<juce::XmlElement> Project::toXml() const
 {
-    auto root = std::make_unique<juce::XmlElement>("PitchEditorProject");
+    auto root = std::make_unique<juce::XmlElement>("HachiTuneProject");
     root->setAttribute("version", 1);
     root->setAttribute("name", name);
     root->setAttribute("audioPath", filePath.getFullPathName());
@@ -78,7 +78,8 @@ std::unique_ptr<juce::XmlElement> Project::toXml() const
 
 bool Project::fromXml(const juce::XmlElement& xml)
 {
-    if (xml.getTagName() != "PitchEditorProject")
+    // Support both old and new project format names for backwards compatibility
+    if (xml.getTagName() != "HachiTuneProject" && xml.getTagName() != "PitchEditorProject")
         return false;
 
     name = xml.getStringAttribute("name", "Untitled");

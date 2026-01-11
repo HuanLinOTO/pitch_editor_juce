@@ -117,9 +117,9 @@ add_subdirectory(third_party/JUCE)
 
 # Create GUI application
 juce_add_gui_app(PitchEditor
-    PRODUCT_NAME "Pitch Editor"
+    PRODUCT_NAME "HachiTune"
     COMPANY_NAME "OpenVPI"
-    BUNDLE_ID "com.openvpi.pitcheditor"
+    BUNDLE_ID "com.openvpi.hachitune"
     COMPANY_COPYRIGHT "Copyright 2026"
     MICROPHONE_PERMISSION_ENABLED TRUE
     FILE_SHARING_ENABLED TRUE
@@ -148,9 +148,9 @@ endif()
 
 # Create VST3 plugin
 juce_add_plugin(PitchEditorPlugin
-    PRODUCT_NAME "Pitch Editor"
+    PRODUCT_NAME "HachiTune"
     COMPANY_NAME "OpenVPI"
-    BUNDLE_ID "com.openvpi.pitcheditor"
+    BUNDLE_ID "com.openvpi.hachitune"
     PLUGIN_MANUFACTURER_CODE OPVP
     PLUGIN_CODE PTE1
     FORMATS VST3 AU $<$<BOOL:${AAX_AVAILABLE}>:AAX>
@@ -495,9 +495,9 @@ if(ONNXRUNTIME_FOUND)
             add_custom_command(TARGET PitchEditor POST_BUILD
                 COMMAND install_name_tool -add_rpath "@executable_path/../Frameworks" "$<TARGET_FILE:PitchEditor>" 2>/dev/null || true)
             add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-                COMMAND install_name_tool -add_rpath "@loader_path/../Frameworks" "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/MacOS/Pitch Editor" 2>/dev/null || true)
+                COMMAND install_name_tool -add_rpath "@loader_path/../Frameworks" "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/MacOS/HachiTune" 2>/dev/null || true)
             add_custom_command(TARGET PitchEditorPlugin_AU POST_BUILD
-                COMMAND install_name_tool -add_rpath "@loader_path/../Frameworks" "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/MacOS/Pitch Editor" 2>/dev/null || true)
+                COMMAND install_name_tool -add_rpath "@loader_path/../Frameworks" "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/MacOS/HachiTune" 2>/dev/null || true)
         endif()
     endif()
 endif()

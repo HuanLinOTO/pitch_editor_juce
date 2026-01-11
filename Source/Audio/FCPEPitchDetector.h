@@ -14,7 +14,8 @@ enum class GPUProvider
 {
     CPU = 0,
     CUDA,      // NVIDIA GPU
-    DirectML   // Windows DirectX 12 (AMD/Intel/NVIDIA)
+    DirectML,  // Windows DirectX 12 (AMD/Intel/NVIDIA)
+    CoreML     // Apple Neural Engine / GPU (macOS/iOS)
 };
 
 /**
