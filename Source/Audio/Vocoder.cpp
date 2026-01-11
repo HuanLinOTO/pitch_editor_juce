@@ -344,11 +344,20 @@ std::vector<float> Vocoder::infer(const std::vector<std::vector<float>>& mel,
         auto outputShape = typeInfo.GetShape();
         size_t outputSize = typeInfo.GetElementCount();
         
-        log("ONNX output shape: [" + 
+        log("ONNX output shape: [" +
             std::to_string(outputShape.size() > 0 ? outputShape[0] : 0) + ", " +
             std::to_string(outputShape.size() > 1 ? outputShape[1] : 0) + ", " +
             std::to_string(outputShape.size() > 2 ? outputShape[2] : 0) + "]");
         log("Output samples: " + std::to_string(outputSize));
+
+        // DIAGNOSTIC: Check if output length matches expected length
+        size_t expectedSamples = numFrames * hopSize;
+        if (outputSize != expectedSamples) {
+            log("WARNING: Output length mismatch! Expected " + std::to_string(expectedSamples) +
+                " samples (" + std::to_string(numFrames) + " frames * " + std::to_string(hopSize) +
+                " hop), but got " + std::to_string(outputSize) + " samples. Difference: " +
+                std::to_string(static_cast<int>(outputSize) - static_cast<int>(expectedSamples)) + " samples");
+        }
         
         // Copy output to vector
         float* outputData = outputTensor.GetTensorMutableData<float>();

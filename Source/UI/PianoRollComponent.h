@@ -4,7 +4,10 @@
 #include "../Models/Project.h"
 #include "../Utils/Constants.h"
 #include "../Utils/UndoManager.h"
+#include "../Utils/DrawCurve.h"
 
+#include <deque>
+#include <memory>
 #include <unordered_map>
 
 class PitchUndoManager;
@@ -100,6 +103,8 @@ private:
     // Pitch drawing helpers
     void applyPitchDrawing(float x, float y);
     void commitPitchDrawing();
+    void applyPitchPoint(int frameIndex, int midiCents);
+    void startNewPitchCurve(int frameIndex, int midiCents);
     
     Project* project = nullptr;
     PitchUndoManager* undoManager = nullptr;
@@ -133,8 +138,10 @@ private:
     bool isDrawing = false;
     std::vector<F0FrameEdit> drawingEdits;  // unique edits per frame
     std::unordered_map<int, size_t> drawingEditIndexByFrame;
-    float lastDrawX = 0.0f;
-    float lastDrawY = 0.0f;
+    int lastDrawFrame = -1;
+    int lastDrawValueCents = 0;
+    DrawCurve* activeDrawCurve = nullptr;
+    std::deque<std::unique_ptr<DrawCurve>> drawCurves;
     
     // Scrollbars
     juce::ScrollBar horizontalScrollBar { false };
@@ -153,8 +160,11 @@ private:
     size_t cachedNoteCount = 0;
     int cachedTotalFrames = 0;
     bool cacheInvalidated = true;  // Start invalidated, force first calculation
+
+public:
     void invalidateBasePitchCache() { cacheInvalidated = true; cachedNoteCount = 0; cachedBasePitch.clear(); }
-    
+
+private:
     // Optional: disable base pitch rendering for performance testing
     static constexpr bool ENABLE_BASE_PITCH_DEBUG = true;  // Set to false to disable
 

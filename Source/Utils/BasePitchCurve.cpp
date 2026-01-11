@@ -25,7 +25,7 @@ std::vector<double> BasePitchCurve::createCosineKernel()
 
     for (int i = 0; i < KERNEL_SIZE; ++i)
     {
-        const double time = 0.001 * (i - 59);  // Time offset in seconds: -0.059 to +0.059
+        const double time = 0.001 * (i - KERNEL_SIZE / 2);  // Time offset in seconds
         kernel[i] = std::cos(M_PI * time / SMOOTH_WINDOW);
         sum += kernel[i];
     }
@@ -51,11 +51,10 @@ std::vector<float> BasePitchCurve::generateForNotes(const std::vector<NoteSegmen
     // Convert frames to milliseconds (at ~86 fps, each frame is ~11.6ms)
     // We'll work at 1ms resolution for smoothing, then resample
     double msPerFrame = 1000.0 * HOP_SIZE / SAMPLE_RATE;  // ~11.6ms
-    
-    // Calculate total duration in seconds, add 0.12s padding for convolution kernel
-    // This matches ds-editor-lite's calculation: round(1000 * (end + 0.12)) + 1
+
+    // Calculate total duration in seconds, add padding for convolution kernel
     double lastNoteEndSec = notes.back().endFrame * msPerFrame / 1000.0;
-    int totalMs = static_cast<int>(std::round(1000.0 * (lastNoteEndSec + 0.12))) + 1;
+    int totalMs = static_cast<int>(std::round(1000.0 * (lastNoteEndSec + SMOOTH_WINDOW))) + 1;
 
     // Create initial step function values at 1ms resolution
     // This matches ds-editor-lite's BasePitchCurve::Convolve algorithm

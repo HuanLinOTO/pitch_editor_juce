@@ -854,22 +854,41 @@ void MainComponent::seek(double time)
 
 void MainComponent::resynthesizeIncremental()
 {
+    DBG("resynthesizeIncremental() called");
+
     if (!project)
+    {
+        DBG("  Skipped: no project");
         return;
+    }
 
     auto& audioData = project->getAudioData();
     if (audioData.melSpectrogram.empty() || audioData.f0.empty())
+    {
+        DBG("  Skipped: mel or f0 empty");
         return;
+    }
     if (!vocoder->isLoaded())
+    {
+        DBG("  Skipped: vocoder not loaded");
         return;
+    }
 
     // Check if there are dirty notes or F0 edits
     if (!project->hasDirtyNotes() && !project->hasF0DirtyRange())
+    {
+        DBG("  Skipped: no dirty notes or F0 edits");
         return;
+    }
 
     auto [dirtyStart, dirtyEnd] = project->getDirtyFrameRange();
     if (dirtyStart < 0 || dirtyEnd < 0)
+    {
+        DBG("  Skipped: invalid dirty range: " + juce::String(dirtyStart) + " to " + juce::String(dirtyEnd));
         return;
+    }
+
+    DBG("  Proceeding with synthesis: frames " + juce::String(dirtyStart) + " to " + juce::String(dirtyEnd));
     
     // Add padding frames for smooth transitions (vocoder needs context)
     // Increased padding for better quality and smoother transitions
@@ -941,10 +960,40 @@ void MainComponent::resynthesizeIncremental()
             float* dst = audioData.waveform.getWritePointer(0);
             int totalSamples = audioData.waveform.getNumSamples();
 
+            // CRITICAL: Verify vocoder output length matches expected length
+            int expectedSamples = capturedEndSample - capturedStartSample;
+            int actualSamples = static_cast<int>(synthesizedAudio.size());
+
+            if (actualSamples != expectedSamples)
+            {
+                DBG("WARNING: Vocoder output length mismatch!");
+                DBG("  Expected: " + juce::String(expectedSamples) + " samples");
+                DBG("  Actual: " + juce::String(actualSamples) + " samples");
+                DBG("  Difference: " + juce::String(actualSamples - expectedSamples) + " samples");
+
+                // If the difference is too large, skip this synthesis to avoid corruption
+                if (std::abs(actualSamples - expectedSamples) > capturedHopSize * 2)
+                {
+                    DBG("  Difference too large, skipping synthesis");
+                    safeThis->toolbar.hideProgress();
+                    return;
+                }
+            }
+
             // Calculate actual replace range (skip padding on both ends)
             int paddingSamples = capturedPaddingFrames * capturedHopSize;
             int replaceStartSample = capturedStartSample + paddingSamples;
             int replaceEndSample = capturedEndSample - paddingSamples;
+
+            // CRITICAL: Adjust for actual vocoder output length
+            // If vocoder output is shorter/longer, adjust the end position
+            int lengthDiff = actualSamples - expectedSamples;
+            if (lengthDiff != 0)
+            {
+                replaceEndSample += lengthDiff;
+                replaceEndSample = std::min(replaceEndSample, totalSamples);
+                DBG("  Adjusted replaceEndSample by " + juce::String(lengthDiff) + " samples");
+            }
 
             // Calculate source offset in synthesized audio
             int srcOffset = paddingSamples;
@@ -1275,7 +1324,24 @@ void MainComponent::segmentIntoNotes(Project& targetProject)
 
                     if (f0End - f0Start < 3) continue;
 
-                    float midi = someNote.midiNote;
+                    // Calculate average MIDI from actual audio data (not SOME prediction)
+                    // Important: average the MIDI values, not the frequencies, because
+                    // freqToMidi is logarithmic and average(midi) != freqToMidi(average(freq))
+                    float midiSum = 0.0f;
+                    int midiCount = 0;
+                    for (int j = f0Start; j < f0End; ++j) {
+                        if (j < static_cast<int>(audioData.voicedMask.size()) &&
+                            audioData.voicedMask[j] && audioData.f0[j] > 0) {
+                            midiSum += freqToMidi(audioData.f0[j]);
+                            midiCount++;
+                        }
+                    }
+
+                    float midi = someNote.midiNote;  // Fallback to SOME prediction
+                    if (midiCount > 0) {
+                        midi = midiSum / midiCount;  // Average of MIDI values
+                    }
+
                     Note note(f0Start, f0End, midi);
                     std::vector<float> f0Values(audioData.f0.begin() + f0Start,
                                                 audioData.f0.begin() + f0End);
@@ -1285,6 +1351,7 @@ void MainComponent::segmentIntoNotes(Project& targetProject)
 
                 // Update UI on main thread
                 juce::MessageManager::callAsync([this]() {
+                    pianoRoll.invalidateBasePitchCache();  // Regenerate smoothed base pitch
                     pianoRoll.repaint();
                 });
             },
@@ -1310,20 +1377,20 @@ void MainComponent::segmentIntoNotes(Project& targetProject)
     auto finalizeNote = [&](int start, int end) {
         if (end - start < 5) return;  // Minimum 5 frames
 
-        // Calculate average F0 for this segment (only voiced frames)
-        float f0Sum = 0.0f;
-        int f0Count = 0;
+        // Calculate average MIDI for this segment (only voiced frames)
+        // Important: average the MIDI values, not the frequencies
+        float midiSum = 0.0f;
+        int midiCount = 0;
         for (int j = start; j < end; ++j) {
             if (j < static_cast<int>(audioData.voicedMask.size()) &&
                 audioData.voicedMask[j] && audioData.f0[j] > 0) {
-                f0Sum += audioData.f0[j];
-                f0Count++;
+                midiSum += freqToMidi(audioData.f0[j]);
+                midiCount++;
             }
         }
-        if (f0Count == 0) return;  // No voiced frames at all
+        if (midiCount == 0) return;  // No voiced frames at all
 
-        float avgF0 = f0Sum / f0Count;
-        float midi = freqToMidi(avgF0);
+        float midi = midiSum / midiCount;
 
         Note note(start, end, midi);
         std::vector<float> f0Values(audioData.f0.begin() + start,

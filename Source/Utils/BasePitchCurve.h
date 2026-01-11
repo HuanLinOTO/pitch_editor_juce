@@ -47,8 +47,8 @@ public:
                                                     int numFrames);
 
 private:
-    static constexpr int KERNEL_SIZE = 119;  // ±59ms at 1000Hz sampling
-    static constexpr double SMOOTH_WINDOW = 0.12;  // 120ms total window
+    static constexpr int KERNEL_SIZE = 241;  // ±120ms at 1000Hz sampling
+    static constexpr double SMOOTH_WINDOW = 0.24;  // 240ms total window for smoother transitions
 
     static std::vector<double> createCosineKernel();
 };

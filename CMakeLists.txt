@@ -210,6 +210,7 @@ set(PITCH_EDITOR_COMMON_SOURCES
     Source/Models/Project.h
     Source/Models/Note.cpp
     Source/Models/Note.h
+    Source/Utils/DrawCurve.h
     Source/Utils/Constants.h
     Source/Utils/PlatformPaths.h
     Source/Utils/MelSpectrogram.cpp
