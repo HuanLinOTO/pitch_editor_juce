@@ -167,106 +167,26 @@ if(ARA_AVAILABLE)
         JucePlugin_Enable_ARA=1)
 endif()
 
-# Add source files - platform-specific files
-set(MAIN_SOURCE Source/Main.cpp)
-set(MAINCOMPONENT_SOURCE Source/UI/MainComponent.cpp)
-set(TOOLBAR_SOURCE Source/UI/ToolbarComponent.cpp)
+# Add source files using GLOB_RECURSE
+file(GLOB_RECURSE PITCH_EDITOR_COMMON_SOURCES
+    "Source/Audio/*.cpp" "Source/Audio/*.h"
+    "Source/UI/*.cpp" "Source/UI/*.h"
+    "Source/Models/*.cpp" "Source/Models/*.h"
+    "Source/Utils/*.cpp" "Source/Utils/*.h"
+    "Source/JuceHeader.h"
+    "Source/Plugin/HostCompatibility.cpp" "Source/Plugin/HostCompatibility.h")
 
-set(PITCH_EDITOR_COMMON_SOURCES
-    Source/JuceHeader.h
-    Source/Plugin/HostCompatibility.h
-    Source/Plugin/HostCompatibility.cpp
-    # Audio - Engine
-    Source/Audio/AudioEngine.cpp
-    Source/Audio/AudioEngine.h
-    Source/Audio/Engine/PlaybackController.cpp
-    Source/Audio/Engine/PlaybackController.h
-    # Audio - Analysis
-    Source/Audio/PitchDetector.cpp
-    Source/Audio/PitchDetector.h
-    Source/Audio/PitchDetectorType.h
-    Source/Audio/FCPEPitchDetector.cpp
-    Source/Audio/FCPEPitchDetector.h
-    Source/Audio/RMVPEPitchDetector.cpp
-    Source/Audio/RMVPEPitchDetector.h
-    Source/Audio/SOMEDetector.cpp
-    Source/Audio/SOMEDetector.h
-    Source/Audio/RealtimePitchProcessor.cpp
-    Source/Audio/RealtimePitchProcessor.h
-    Source/Audio/Analysis/AudioAnalyzer.cpp
-    Source/Audio/Analysis/AudioAnalyzer.h
-    # Audio - Synthesis
-    Source/Audio/Vocoder.cpp
-    Source/Audio/Vocoder.h
-    Source/Audio/Synthesis/IncrementalSynthesizer.cpp
-    Source/Audio/Synthesis/IncrementalSynthesizer.h
-    # Audio - IO
-    Source/Audio/IO/AudioFileManager.cpp
-    Source/Audio/IO/AudioFileManager.h
-    # UI - Main
-    Source/UI/CustomTitleBar.cpp
-    Source/UI/CustomTitleBar.h
-    ${MAINCOMPONENT_SOURCE}
-    Source/UI/MainComponent.h
-    Source/UI/Main/MenuHandler.cpp
-    Source/UI/Main/MenuHandler.h
-    Source/UI/Main/SettingsManager.cpp
-    Source/UI/Main/SettingsManager.h
-    # UI - PianoRoll
-    Source/UI/PianoRollComponent.cpp
-    Source/UI/PianoRollComponent.h
-    Source/UI/PianoRoll/CoordinateMapper.h
-    Source/UI/PianoRoll/PianoRollRenderer.cpp
-    Source/UI/PianoRoll/PianoRollRenderer.h
-    Source/UI/PianoRoll/ScrollZoomController.cpp
-    Source/UI/PianoRoll/ScrollZoomController.h
-    Source/UI/PianoRoll/PitchEditor.cpp
-    Source/UI/PianoRoll/PitchEditor.h
-    # UI - Components
-    Source/UI/WaveformComponent.cpp
-    Source/UI/WaveformComponent.h
-    ${TOOLBAR_SOURCE}
-    Source/UI/ToolbarComponent.h
-    Source/UI/ParameterPanel.cpp
-    Source/UI/ParameterPanel.h
-    Source/UI/SettingsComponent.cpp
-    Source/UI/SettingsComponent.h
-    Source/UI/StyledComponents.cpp
-    Source/UI/StyledComponents.h
-    # Models
-    Source/Models/Project.cpp
-    Source/Models/Project.h
-    Source/Models/Note.cpp
-    Source/Models/Note.h
-    # Utils
-    Source/Utils/DrawCurve.h
-    Source/Utils/Constants.h
-    Source/Utils/AppLogger.h
-    Source/Utils/PlatformPaths.h
-    Source/Utils/UndoManager.h
-    Source/Utils/Localization.h
-    Source/Utils/MelSpectrogram.cpp
-    Source/Utils/MelSpectrogram.h
-    Source/Utils/BasePitchCurve.cpp
-    Source/Utils/BasePitchCurve.h
-    Source/Utils/F0Smoother.cpp
-    Source/Utils/F0Smoother.h
-    Source/Utils/PitchCurveProcessor.cpp
-    Source/Utils/PitchCurveProcessor.h
-    Source/Utils/SinusoidalSmoothing.cpp
-    Source/Utils/SinusoidalSmoothing.h)
+file(GLOB PLUGIN_SOURCES
+    "Source/Plugin/PluginProcessor.cpp" "Source/Plugin/PluginProcessor.h"
+    "Source/Plugin/PluginEditor.cpp" "Source/Plugin/PluginEditor.h"
+    "Source/Plugin/ARADocumentController.cpp" "Source/Plugin/ARADocumentController.h")
 
 target_sources(PitchEditor PRIVATE
-    ${MAIN_SOURCE}
+    Source/Main.cpp
     ${PITCH_EDITOR_COMMON_SOURCES})
 
 target_sources(PitchEditorPlugin PRIVATE
-    Source/Plugin/PluginProcessor.cpp
-    Source/Plugin/PluginProcessor.h
-    Source/Plugin/PluginEditor.cpp
-    Source/Plugin/PluginEditor.h
-    Source/Plugin/ARADocumentController.cpp
-    Source/Plugin/ARADocumentController.h
+    ${PLUGIN_SOURCES}
     ${PITCH_EDITOR_COMMON_SOURCES})
 
 # Link JUCE modules
@@ -582,193 +502,48 @@ target_compile_definitions(PitchEditorPlugin PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:PitchEditorPlugin,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:PitchEditorPlugin,JUCE_VERSION>")
 
-# Download models if not present
+# Check required models
 set(MODELS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Resources/models")
-set(MODELS_ZIP "${CMAKE_BINARY_DIR}/models.zip")
 set(REQUIRED_MODELS
-    "${MODELS_DIR}/pc_nsf_hifigan.onnx"
-    "${MODELS_DIR}/fcpe.onnx"
-    "${MODELS_DIR}/some.onnx"
+    pc_nsf_hifigan.onnx
+    fcpe.onnx
+    some.onnx
+    rmvpe.onnx
+    cent_table.bin
+    mel_filterbank.bin
 )
 
-# Check if any required model is missing
-set(MODELS_MISSING FALSE)
+# Check required models
 foreach(MODEL ${REQUIRED_MODELS})
-    if(NOT EXISTS ${MODEL})
-        set(MODELS_MISSING TRUE)
-        message(STATUS "Missing model: ${MODEL}")
+    if(NOT EXISTS "${MODELS_DIR}/${MODEL}")
+        message(FATAL_ERROR "Required model not found: ${MODELS_DIR}/${MODEL}")
     endif()
 endforeach()
+message(STATUS "All required models found")
 
-if(MODELS_MISSING)
-    message(FATAL_ERROR "Required models not found in ${MODELS_DIR}. "
-                        "Please ensure the models folder exists with the following files:\n"
-                        "  - pc_nsf_hifigan.onnx\n"
-                        "  - fcpe.onnx\n"
-                        "  - some.onnx")
-else()
-    message(STATUS "All required models found")
-endif()
-
-# ONNX model path
-set(ONNX_MODEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Resources/models/pc_nsf_hifigan.onnx")
-if(EXISTS ${ONNX_MODEL_PATH})
-    message(STATUS "Found ONNX model: ${ONNX_MODEL_PATH}")
-    # Copy model to output directory
+# Copy all files from models directory to targets
+file(GLOB ALL_MODEL_FILES "${MODELS_DIR}/*")
+foreach(MODEL_PATH ${ALL_MODEL_FILES})
+    get_filename_component(MODEL_NAME "${MODEL_PATH}" NAME)
     if(APPLE)
-        # macOS: Copy to Resources folder in app bundle
         add_custom_command(TARGET PitchEditor POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:PitchEditor>/Contents/Resources/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNX_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditor>/Contents/Resources/models/pc_nsf_hifigan.onnx")
-        # VST3 plugin
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:PitchEditor>/Contents/Resources/models/${MODEL_NAME}")
         add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/Resources/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNX_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/Resources/models/pc_nsf_hifigan.onnx")
-        # AU plugin
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/Resources/models/${MODEL_NAME}")
         add_custom_command(TARGET PitchEditorPlugin_AU POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/Resources/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNX_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/Resources/models/pc_nsf_hifigan.onnx")
-    else()
-        # Windows/Linux: Copy next to executable
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PitchEditor>/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNX_MODEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditor>/models/pc_nsf_hifigan.onnx")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNX_MODEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/pc_nsf_hifigan.onnx")
-    endif()
-else()
-    message(WARNING "ONNX model not found at ${ONNX_MODEL_PATH}")
-endif()
-
-# FCPE model and resources
-set(FCPE_MODEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Resources/models/fcpe.onnx")
-set(FCPE_MEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Resources/models/mel_filterbank.bin")
-set(FCPE_CENT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Resources/models/cent_table.bin")
-
-if(EXISTS ${FCPE_MODEL_PATH})
-    message(STATUS "Found FCPE model: ${FCPE_MODEL_PATH}")
-    if(APPLE)
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditor>/Contents/Resources/models/fcpe.onnx")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/Resources/models/fcpe.onnx")
-        add_custom_command(TARGET PitchEditorPlugin_AU POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/Resources/models/fcpe.onnx")
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/Resources/models/${MODEL_NAME}")
     else()
         add_custom_command(TARGET PitchEditor POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PitchEditor>/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MODEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditor>/models/fcpe.onnx")
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_FILE_DIR:PitchEditor>/models/${MODEL_NAME}")
         add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MODEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/fcpe.onnx")
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/${MODEL_NAME}")
     endif()
-else()
-    message(WARNING "FCPE model not found at ${FCPE_MODEL_PATH}")
-endif()
-
-if(EXISTS ${FCPE_MEL_PATH})
-    if(APPLE)
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditor>/Contents/Resources/models/mel_filterbank.bin")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/Resources/models/mel_filterbank.bin")
-        add_custom_command(TARGET PitchEditorPlugin_AU POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/Resources/models/mel_filterbank.bin")
-    else()
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditor>/models/mel_filterbank.bin")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_MEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/mel_filterbank.bin")
-    endif()
-endif()
-
-if(EXISTS ${FCPE_CENT_PATH})
-    if(APPLE)
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_CENT_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditor>/Contents/Resources/models/cent_table.bin")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_CENT_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/Resources/models/cent_table.bin")
-        add_custom_command(TARGET PitchEditorPlugin_AU POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_CENT_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/Resources/models/cent_table.bin")
-    else()
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_CENT_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditor>/models/cent_table.bin")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FCPE_CENT_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/cent_table.bin")
-    endif()
-endif()
-
-# SOME model
-set(SOME_MODEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Resources/models/some.onnx")
-if(EXISTS ${SOME_MODEL_PATH})
-    message(STATUS "Found SOME model: ${SOME_MODEL_PATH}")
-    if(APPLE)
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SOME_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditor>/Contents/Resources/models/some.onnx")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SOME_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_VST3>/Contents/Resources/models/some.onnx")
-        add_custom_command(TARGET PitchEditorPlugin_AU POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SOME_MODEL_PATH}"
-            "$<TARGET_BUNDLE_DIR:PitchEditorPlugin_AU>/Contents/Resources/models/some.onnx")
-    else()
-        add_custom_command(TARGET PitchEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SOME_MODEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditor>/models/some.onnx")
-        add_custom_command(TARGET PitchEditorPlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SOME_MODEL_PATH}"
-            "$<TARGET_FILE_DIR:PitchEditorPlugin_VST3>/models/some.onnx")
-    endif()
-else()
-    message(WARNING "SOME model not found at ${SOME_MODEL_PATH}")
-endif()
+endforeach()
 
 # Copy language files
 set(LANG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Resources/lang")
