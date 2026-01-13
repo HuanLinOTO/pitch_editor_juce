@@ -35,3 +35,6 @@ cmake-build-*/
 **/__pycache__/
 Resources/models/*.onnx
 Resources/models/*.bin
+
+tempcalude-*
+.claude
